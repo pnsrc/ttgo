@@ -1,0 +1,16 @@
+# Правила проверяются по порядку, первое совпавшее применяется.
+# По умолчанию — allow.
+
+# Заблокировать диапазон IP
+# [[rule]]
+# cidr = "192.168.1.0/24"
+# action = "deny"
+
+# Разрешить только клиентов с конкретным TLS client random prefix
+# [[rule]]
+# client_random_prefix = "deadbeef"
+# action = "allow"
+
+# Запретить всё остальное (catch-all deny — ставить последним)
+# [[rule]]
+# action = "deny"

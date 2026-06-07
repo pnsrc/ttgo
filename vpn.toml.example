@@ -1,0 +1,51 @@
+listen_address = "0.0.0.0:443"
+ipv6_available = true
+allow_private_network_connections = false
+
+tls_handshake_timeout_secs        = 10
+client_listener_timeout_secs      = 600
+connection_establishment_timeout_secs = 30
+tcp_connections_timeout_secs      = 604800
+udp_connections_timeout_secs      = 300
+
+credentials_file = "credentials.toml"
+rules_file       = "rules.toml"
+
+auth_failure_status_code = 407
+
+[listen_protocols.http2]
+initial_connection_window_size = 8388608
+initial_stream_window_size     = 131072
+max_concurrent_streams         = 1000
+max_frame_size                 = 16384
+header_table_size              = 65536
+
+# Раскомментировать для HTTP/3
+# [listen_protocols.quic]
+# initial_max_data                      = 104857600
+# initial_max_stream_data_bidi_local    = 1048576
+# initial_max_stream_data_bidi_remote   = 1048576
+# initial_max_stream_data_uni           = 1048576
+# initial_max_streams_bidi              = 4096
+# initial_max_streams_uni               = 4096
+# max_connection_window                 = 25165824
+# max_stream_window                     = 16777216
+# disable_active_migration              = true
+# enable_early_data                     = true
+
+[forward_protocol]
+direct = {}
+
+# [icmp]
+# interface_name        = "eth0"
+# request_timeout_secs  = 3
+
+# --- Хранилище пользователей ---
+# store_type = "file"      # читает credentials_file (default)
+# store_type = "sqlite"
+# store_dsn  = "users.db"
+# store_type = "postgres"
+# store_dsn  = "postgres://user:pass@localhost/trusttunnel?sslmode=disable"
+
+# Время кэша в памяти — БД не опрашивается чаще этого
+cache_ttl_secs = 30

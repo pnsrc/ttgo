@@ -1,0 +1,225 @@
+package proxy
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/pnsrc/ttgo/internal/auth"
+	icmpmux "github.com/pnsrc/ttgo/internal/icmp"
+	"github.com/pnsrc/ttgo/internal/rules"
+	"github.com/pnsrc/ttgo/internal/server"
+	udpmux "github.com/pnsrc/ttgo/internal/udp"
+)
+
+const (
+	pseudoHostUDP   = "_udp2"
+	pseudoHostICMP  = "_icmp"
+	pseudoHostCheck = "_check"
+)
+
+type Options struct {
+	AllowPrivateNet    bool
+	ConnectTimeoutSecs int
+	TCPIdleTimeoutSecs int
+	AuthFailureCode    int
+}
+
+type Handler struct {
+	auth    *auth.Authenticator
+	rules   *rules.Engine
+	opts    Options
+	dialer  *net.Dialer
+	udpMux  *udpmux.Mux
+	icmpMux *icmpmux.Mux
+}
+
+func New(a *auth.Authenticator, re *rules.Engine, opts Options, udp *udpmux.Mux, icmp *icmpmux.Mux) *Handler {
+	timeout := time.Duration(opts.ConnectTimeoutSecs) * time.Second
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	return &Handler{
+		auth:  a,
+		rules: re,
+		opts:  opts,
+		dialer: &net.Dialer{
+			Timeout:   timeout,
+			KeepAlive: 30 * time.Second,
+		},
+		udpMux:  udp,
+		icmpMux: icmp,
+	}
+}
+
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodConnect {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Auth
+	username := h.auth.Check(r)
+	if username == "" {
+		if h.opts.AuthFailureCode == 405 {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		} else {
+			w.Header().Set("Proxy-Authenticate", `Basic realm="TrustTunnel"`)
+			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+		}
+		return
+	}
+
+	// Rules: IP + TLS client random из ClientHello
+	clientIP := remoteIP(r)
+	clientRandom := server.TLSRandomFromContext(r.Context())
+	if !h.rules.Allow(clientIP, clientRandom) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	target := r.Host
+	if target == "" {
+		target = r.URL.Host
+	}
+
+	switch target {
+	case pseudoHostCheck:
+		w.WriteHeader(http.StatusOK)
+
+	case pseudoHostUDP:
+		if h.udpMux == nil {
+			http.Error(w, "UDP not available", http.StatusServiceUnavailable)
+			return
+		}
+		// Per-session: UDP tracker живёт пока живёт TLS соединение,
+		// cleanup через ctx.Done() в session.go
+		sess := server.SessionFromContext(r.Context())
+		if sess == nil {
+			http.Error(w, "no session", http.StatusInternalServerError)
+			return
+		}
+		sess.UDP(h.udpMux).ServeHTTP(w, r)
+
+	case pseudoHostICMP:
+		if h.icmpMux == nil {
+			http.Error(w, "ICMP not available", http.StatusServiceUnavailable)
+			return
+		}
+		sess := server.SessionFromContext(r.Context())
+		if sess == nil {
+			http.Error(w, "no session", http.StatusInternalServerError)
+			return
+		}
+		sess.ICMP(h.icmpMux).ServeHTTP(w, r)
+
+	default:
+		h.handleTCPTunnel(w, r, target, username)
+	}
+}
+
+func (h *Handler) handleTCPTunnel(w http.ResponseWriter, r *http.Request, target, username string) {
+	if !h.opts.AllowPrivateNet {
+		host, _, _ := net.SplitHostPort(target)
+		if host == "" {
+			host = target
+		}
+		if ip := resolveIP(r.Context(), host); ip != nil && server.IsPrivateIP(ip) {
+			slog.Warn("blocked private target", "target", target, "user", username)
+			http.Error(w, fmt.Sprintf("%s is a private address", target), http.StatusForbidden)
+			return
+		}
+	}
+
+	// HTTP/1.1: нужен hijack для bidirectional streaming
+	if isHTTP1(r) {
+		serveHTTP1Tunnel(w, r, target, username, h.dialer)
+		return
+	}
+
+	// HTTP/2 и HTTP/3: ResponseWriter поддерживает streaming напрямую
+	conn, err := h.dialer.DialContext(r.Context(), "tcp", target)
+	if err != nil {
+		slog.Warn("dial failed", "target", target, "user", username, "err", err)
+		http.Error(w, fmt.Sprintf("cannot connect to %s", target), http.StatusBadGateway)
+		return
+	}
+	defer conn.Close()
+
+	w.WriteHeader(http.StatusOK)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	slog.Debug("tunnel open", "target", target, "user", username)
+
+	errCh := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(conn, r.Body)
+		errCh <- err
+		if tc, ok := conn.(*net.TCPConn); ok {
+			tc.CloseWrite()
+		}
+	}()
+	go func() {
+		_, err := copyFlush(w, conn)
+		errCh <- err
+	}()
+
+	select {
+	case <-r.Context().Done():
+	case <-errCh:
+	}
+	slog.Debug("tunnel closed", "target", target, "user", username)
+}
+
+func copyFlush(w http.ResponseWriter, src io.Reader) (int64, error) {
+	flusher, canFlush := w.(http.Flusher)
+	buf := make([]byte, 32*1024)
+	var total int64
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			wn, werr := w.Write(buf[:n])
+			total += int64(wn)
+			if canFlush {
+				flusher.Flush()
+			}
+			if werr != nil {
+				return total, werr
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return total, nil
+			}
+			return total, err
+		}
+	}
+}
+
+func remoteIP(r *http.Request) net.IP {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if ip := net.ParseIP(strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])); ip != nil {
+			return ip
+		}
+	}
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return net.ParseIP(host)
+}
+
+func resolveIP(ctx context.Context, host string) net.IP {
+	if ip := net.ParseIP(host); ip != nil {
+		return ip
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil || len(ips) == 0 {
+		return nil
+	}
+	return ips[0]
+}
