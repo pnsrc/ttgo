@@ -9,6 +9,7 @@ import (
 
 type ctxRandomKey struct{}
 type ctxSessionKey struct{}
+type ctxRawConnKey struct{}
 
 // TLSRandomFromContext возвращает TLS ClientHello random (32 байта) или nil.
 func TLSRandomFromContext(ctx context.Context) []byte {
@@ -28,6 +29,16 @@ func contextWithRandom(ctx context.Context, random []byte) context.Context {
 
 func contextWithSession(ctx context.Context, s *Session) context.Context {
 	return context.WithValue(ctx, ctxSessionKey{}, s)
+}
+
+// RawConnFromContext возвращает исходный net.Conn для данного соединения.
+func RawConnFromContext(ctx context.Context) net.Conn {
+	v, _ := ctx.Value(ctxRawConnKey{}).(net.Conn)
+	return v
+}
+
+func contextWithRawConn(ctx context.Context, c net.Conn) context.Context {
+	return context.WithValue(ctx, ctxRawConnKey{}, c)
 }
 
 // randomConn — net.Conn с буферизованными первыми байтами и client random.
@@ -90,13 +101,20 @@ func (l *randomListener) Accept() (net.Conn, error) {
 func ConnContextFunc() func(context.Context, net.Conn) context.Context {
 	return func(ctx context.Context, c net.Conn) context.Context {
 		var random []byte
+		var rawConn net.Conn
 		if tc, ok := c.(interface{ NetConn() net.Conn }); ok {
-			if rc, ok := tc.NetConn().(*randomConn); ok {
+			inner := tc.NetConn()
+			rawConn = inner
+			if rc, ok := inner.(*randomConn); ok {
 				random = rc.random
+				rawConn = rc.Conn // реальный TCP conn под буфером
 			}
 		}
 		if random != nil {
 			ctx = contextWithRandom(ctx, random)
+		}
+		if rawConn != nil {
+			ctx = contextWithRawConn(ctx, rawConn)
 		}
 
 		// newSession вешает cleanup UDP на ctx.Done()

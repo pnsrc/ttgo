@@ -34,6 +34,7 @@ type Config struct {
 	ForwardProtocol ForwardProtocol `toml:"forward_protocol"`
 	ICMP            *ICMPConfig     `toml:"icmp"`
 	Metrics         *MetricsConfig  `toml:"metrics"`
+	Admin           *AdminConfig    `toml:"admin"`
 }
 
 type ListenProtocols struct {
@@ -89,6 +90,13 @@ type ICMPConfig struct {
 type MetricsConfig struct {
 	Address            string `toml:"address"`
 	RequestTimeoutSecs int    `toml:"request_timeout_secs"`
+}
+
+type AdminConfig struct {
+	// Адрес admin API (только localhost). Пример: "127.0.0.1:9090"
+	Address string `toml:"address"`
+	// Токен авторизации (Bearer). Если пустой — admin API отключён.
+	Token string `toml:"token"`
 }
 
 // HostsConfig — hosts.toml

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // SQLiteStore хранит пользователей в SQLite.
@@ -21,7 +21,7 @@ type SQLiteStore struct {
 }
 
 func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}

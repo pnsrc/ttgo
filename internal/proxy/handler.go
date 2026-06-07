@@ -75,6 +75,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Регистрируем соединение для возможного GOAWAY при удалении юзера.
+	// Получаем raw net.Conn из контекста (установлен в ConnContextFunc).
+	if rawConn := server.RawConnFromContext(r.Context()); rawConn != nil {
+		tracker := server.GlobalConnTracker
+		tracker.Register(username, rawConn)
+		defer tracker.Unregister(username, rawConn)
+	}
+
 	// Rules: IP + TLS client random из ClientHello
 	clientIP := remoteIP(r)
 	clientRandom := server.TLSRandomFromContext(r.Context())

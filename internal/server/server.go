@@ -22,7 +22,7 @@ type Server struct {
 	cfg       *config.Config
 	hostsPath string
 	tlsMgr    *TLSManager
-	mainMux   *http.ServeMux // основной mux: VPN + ping
+	mainMux   http.Handler
 	vpnHandler http.Handler  // только VPN трафик
 	h2srv     *http.Server
 	h3srv     *http3.Server
@@ -48,11 +48,12 @@ func New(cfg *config.Config, hostsPath string, vpnHandler http.Handler) (*Server
 	return s, nil
 }
 
-// buildMux собирает финальный http.ServeMux с ping_hosts и основным handler.
-func (s *Server) buildMux(hosts *config.HostsConfig, vpn http.Handler) *http.ServeMux {
+// buildMux собирает финальный handler с ping_hosts и основным VPN handler.
+// CONNECT-запросы идут напрямую в vpn, минуя ServeMux (иначе Go делает 301 redirect
+// потому что authority-form URL не начинается с /).
+func (s *Server) buildMux(hosts *config.HostsConfig, vpn http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
-	// Ping hosts: GET /ping → 200 OK (или любой путь на ping hostname)
 	pingSet := make(map[string]bool)
 	for _, h := range hosts.PingHosts {
 		pingSet[h.Hostname] = true
@@ -60,11 +61,8 @@ func (s *Server) buildMux(hosts *config.HostsConfig, vpn http.Handler) *http.Ser
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
-		if idx := len(host); idx > 0 {
-			// strip port
-			if h, _, err := net.SplitHostPort(host); err == nil {
-				host = h
-			}
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
 		}
 		if pingSet[host] && r.Method == http.MethodGet {
 			w.WriteHeader(http.StatusOK)
@@ -73,7 +71,13 @@ func (s *Server) buildMux(hosts *config.HostsConfig, vpn http.Handler) *http.Ser
 		vpn.ServeHTTP(w, r)
 	})
 
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodConnect {
+			vpn.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) Run(ctx context.Context) error {

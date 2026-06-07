@@ -48,6 +48,14 @@ func main() {
 	cacheTTL := time.Duration(cfg.CacheTTLSecs) * time.Second
 	authn := auth.New(userStore, cacheTTL)
 
+	// При инвалидации credentials — слать GOAWAY всем активным соединениям юзера.
+	auth.OnInvalidate = func(username string) {
+		server.GlobalConnTracker.KickUser(username)
+	}
+
+	// Admin API (опционально, только если настроен в конфиге).
+	server.StartAdminAPI(cfg.Admin, authn)
+
 	rulesEng := rules.New()
 	if err := rulesEng.LoadFile(cfg.RulesFile); err != nil {
 		slog.Error("load rules", "err", err)
