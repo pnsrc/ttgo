@@ -93,10 +93,13 @@ type MetricsConfig struct {
 }
 
 type AdminConfig struct {
-	// Адрес admin API (только localhost). Пример: "127.0.0.1:9090"
+	// Адрес admin API. Пример: "127.0.0.1:9090"
 	Address string `toml:"address"`
 	// Токен авторизации (Bearer). Если пустой — admin API отключён.
 	Token string `toml:"token"`
+	// Путь к директории со статикой webui (опционально, если хочешь
+	// чтобы тот же процесс раздавал фронтенд).
+	WebRoot string `toml:"web_root"`
 }
 
 // HostsConfig — hosts.toml

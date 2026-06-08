@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pnsrc/ttgo/internal/admin"
 	"github.com/pnsrc/ttgo/internal/auth"
 	"github.com/pnsrc/ttgo/internal/auth/store"
 	"github.com/pnsrc/ttgo/internal/config"
@@ -18,6 +19,25 @@ import (
 	"github.com/pnsrc/ttgo/internal/server"
 	udpmux "github.com/pnsrc/ttgo/internal/udp"
 )
+
+// adminStoreAdapter оборачивает admin.UserStore в server.AdminUserStore.
+type adminStoreAdapter struct{ s admin.UserStore }
+
+func (a adminStoreAdapter) List() ([]server.AdminUser, error) {
+	entries, err := a.s.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]server.AdminUser, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, server.AdminUser{Username: e.Username, MaxDevices: e.MaxDevices})
+	}
+	return out, nil
+}
+func (a adminStoreAdapter) Add(u, p string) error                  { return a.s.Add(u, p) }
+func (a adminStoreAdapter) Delete(u string) error                  { return a.s.Delete(u) }
+func (a adminStoreAdapter) ChangePassword(u, p string) error       { return a.s.ChangePassword(u, p) }
+func (a adminStoreAdapter) SetMaxDevices(u string, n int) error    { return a.s.SetMaxDevices(u, n) }
 
 func main() {
 	logLevel := flag.String("l", "info", "log level: info|debug|trace")
@@ -55,7 +75,24 @@ func main() {
 	}
 
 	// Admin API (опционально, только если настроен в конфиге).
-	server.StartAdminAPI(cfg.Admin, authn)
+	var adminStore server.AdminUserStore
+	if cfg.Admin != nil && cfg.Admin.Token != "" {
+		// Открываем admin store на основе vpn.toml (sqlite/file/postgres)
+		if s, err := admin.OpenStoreFromVPN(admin.Paths{
+			VPN:   vpnPath,
+			Hosts: hostsPath,
+			Creds: cfg.CredentialsFile,
+		}); err == nil {
+			adminStore = adminStoreAdapter{s: s}
+		} else {
+			slog.Warn("admin store unavailable", "err", err)
+		}
+	}
+	webRoot := ""
+	if cfg.Admin != nil {
+		webRoot = cfg.Admin.WebRoot
+	}
+	server.StartAdminAPI(cfg.Admin, authn, adminStore, webRoot)
 
 	rulesEng := rules.New()
 	if err := rulesEng.LoadFile(cfg.RulesFile); err != nil {
