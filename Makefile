@@ -17,6 +17,13 @@ build-linux:
 	GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $(BINARY).linux $(CMD)
 	GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $(ADMIN).linux $(ADMCMD)
 
+build-mac:
+	GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o $(ADMIN).mac-arm $(ADMCMD)
+	GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o $(ADMIN).mac-amd $(ADMCMD)
+
+build-android:
+	GOOS=android GOARCH=arm64 go build -ldflags="-s -w" -o $(ADMIN).android-arm64 $(ADMCMD)
+
 run:
 	sudo ./$(BINARY) vpn.toml hosts.toml -l debug
 

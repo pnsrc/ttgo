@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+
+	"github.com/pnsrc/ttgo/internal/server"
 )
 
 // serveHTTP1Tunnel обрабатывает CONNECT для HTTP/1.1 через hijack.
@@ -40,6 +42,10 @@ func serveHTTP1Tunnel(w http.ResponseWriter, r *http.Request, target, username s
 
 	slog.Debug("h1 tunnel open", "target", target, "user", username)
 
+	// Учёт активности: для HTTP/1.1 rawConn = сам hijacked clientConn.
+	server.GlobalConnTracker.TunnelOpened(clientConn)
+	defer server.GlobalConnTracker.TunnelClosed(clientConn)
+
 	// Флушим буферизованные данные которые клиент уже успел прислать
 	var clientReader io.Reader = clientConn
 	if brw.Reader.Buffered() > 0 {
@@ -48,14 +54,16 @@ func serveHTTP1Tunnel(w http.ResponseWriter, r *http.Request, target, username s
 
 	errCh := make(chan error, 2)
 	go func() {
-		_, err := io.Copy(conn, clientReader)
+		n, err := io.Copy(conn, clientReader)
+		server.GlobalConnTracker.AddBytes(clientConn, uint64(n), 0)
 		errCh <- err
 		if tc, ok := conn.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
 	}()
 	go func() {
-		_, err := io.Copy(clientConn, conn)
+		n, err := io.Copy(clientConn, conn)
+		server.GlobalConnTracker.AddBytes(clientConn, 0, uint64(n))
 		errCh <- err
 		if tc, ok := clientConn.(*net.TCPConn); ok {
 			tc.CloseWrite()

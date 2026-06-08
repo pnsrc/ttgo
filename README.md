@@ -63,6 +63,48 @@ trusttunnel_endpoint  - the proxy server
 ttadmin               - admin TUI
 ```
 
+## Quick install
+
+One-line install on a fresh Linux server (requires Go and git):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pnsrc/ttgo/main/install.sh | sudo bash
+```
+
+The script clones the repo into a temp dir, builds both binaries, installs them to `/opt/trusttunnel_endpoint`, sets up a systemd service, symlinks `ttadmin` into `/usr/local/bin`, and launches the setup wizard.
+
+Options:
+
+```bash
+# Custom install path
+curl -fsSL https://raw.githubusercontent.com/pnsrc/ttgo/main/install.sh | sudo bash -s -- --prefix /usr/local/trusttunnel
+
+# Skip systemd / wizard (useful for containers)
+curl -fsSL https://raw.githubusercontent.com/pnsrc/ttgo/main/install.sh | sudo bash -s -- --no-systemd --no-setup
+
+# Build from a local clone instead of fetching
+sudo bash install.sh --build-dir .
+```
+
+After install:
+
+```bash
+systemctl enable --now trusttunnel-endpoint
+ttadmin --vpn /opt/trusttunnel_endpoint/vpn.toml --hosts /opt/trusttunnel_endpoint/hosts.toml
+```
+
+## Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pnsrc/ttgo/main/uninstall.sh | sudo bash
+```
+
+By default this stops the systemd service, removes binaries and the symlink, and keeps configs/users.db/certs in case you reinstall. To wipe everything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pnsrc/ttgo/main/uninstall.sh | sudo bash -s -- --purge --yes
+```
+
 ## Configuration
 
 The server takes two config files as positional arguments:
@@ -141,6 +183,12 @@ make build-admin   # ttadmin binary
 make build-linux   # both, cross-compiled for Linux amd64
 ```
 
+For a full install including systemd and the setup wizard, use `install.sh`:
+
+```bash
+sudo bash install.sh --build-dir .
+```
+
 ## Admin tool
 
 ```
@@ -160,11 +208,84 @@ Keys in the management TUI:
 1        Users tab
 2        Certificates tab
 3        Status tab
+1        Users tab (CRUD + device limits + traffic)
+2        Sessions tab (live connections, kick)
+3        Certificates tab
+4        Status tab
 A        Add user / add certificate
 D        Delete user
 P        Change password
+L        Set device limit (on Users tab)
+k        Kick selected session (on Sessions tab)
+K        Kick all sessions of selected user
 R        Reload TLS (SIGHUP) / refresh
 Ctrl+C   Quit
+```
+
+## Per-user features
+
+### Device limits
+
+Each user has an optional `max_devices` cap. When a user already has N active TLS connections and tries to open another, the new request gets a `407 Proxy Authentication Required` with `X-Revoke-Reason: Device limit reached` and a human-readable message. Set the limit through the TUI (`L` key on Users tab) or directly in the store. `0` means unlimited (default).
+
+### P2P relay
+
+The endpoint exposes a special pseudo-host `_p2p` that pairs two authenticated TCP streams of the same user in a named room. This is used by `ttadmin tunnel` to forward TCP services between devices through the server, without any open ports or NAT traversal on either side.
+
+## Tunneling between devices
+
+`ttadmin tunnel` builds an end-to-end TCP forwarder over the server. Two devices logged in as the same user join a shared room name — the server connects their streams. Useful for reaching a home machine from anywhere, exposing a router admin page, RDP, SSH, etc.
+
+```
+ttadmin tunnel expose --server HOST:PORT --user X --pass Y --room NAME --target HOST:PORT
+ttadmin tunnel reach  --server HOST:PORT --user X --pass Y --room NAME --local  HOST:PORT
+```
+
+Common flags:
+
+```
+--server HOST:PORT     TrustTunnel endpoint address
+--user NAME            TrustTunnel username
+--pass PASSWORD        TrustTunnel password
+--room NAME            shared room (must match on both sides)
+--insecure             skip TLS verification (self-signed cert)
+--hostname NAME        override SNI / Host header
+```
+
+`expose` only:
+
+```
+--target HOST:PORT     local service to make reachable
+--pool N               number of pending listen sessions (default 4)
+```
+
+`reach` only:
+
+```
+--local HOST:PORT      local listen address
+```
+
+Example — SSH to a home PC from a laptop:
+
+```bash
+# On home PC
+ttadmin tunnel expose --server my.endpoint:443 --user alice --pass secret \
+                      --room ssh --target 127.0.0.1:22
+
+# On laptop
+ttadmin tunnel reach  --server my.endpoint:443 --user alice --pass secret \
+                      --room ssh --local 127.0.0.1:2222
+
+ssh -p 2222 localhost   # reaches the home PC through the server
+```
+
+Both sides must authenticate as the same user. The server will not bridge different users sharing the same room name. Each P2P stream counts as a connection against the user's `max_devices` limit.
+
+For other platforms:
+
+```
+make build-mac        # darwin/arm64 + darwin/amd64
+make build-android    # android/arm64 (e.g. Termux)
 ```
 
 ## Admin API
@@ -172,11 +293,14 @@ Ctrl+C   Quit
 When configured, the endpoint exposes a local HTTP API:
 
 ```
-POST /users/kick?username=X    invalidate cache and send GOAWAY to active connections
-GET  /users/active             map of username to active connection count
+POST /users/kick?username=X&reason=Z         invalidate cache, mark sessions revoked, GOAWAY in 2s
+POST /sessions/kick?username=X&remote_addr=Y kick a single TLS connection
+GET  /users/active                           map of username to active connection count
+GET  /sessions                               list of all active TLS sessions with traffic counters
+GET  /stats                                  per-user lifetime traffic and connection stats
 ```
 
-Requests require `Authorization: Bearer <token>`.
+All requests require `Authorization: Bearer <token>`.
 
 ## systemd
 

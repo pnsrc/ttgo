@@ -73,10 +73,15 @@ func RunMigrate(paths Paths) error {
 			if err := store.Add(e.Username, e.Password); err != nil {
 				addLog(fmt.Sprintf("  SKIP %s: %s", e.Username, err))
 				skipped++
+				continue
+			}
+			if e.MaxDevices > 0 {
+				_ = store.SetMaxDevices(e.Username, e.MaxDevices)
+				addLog(fmt.Sprintf("  OK   %s (max_devices=%d)", e.Username, e.MaxDevices))
 			} else {
 				addLog(fmt.Sprintf("  OK   %s", e.Username))
-				migrated++
 			}
+			migrated++
 		}
 		addLog(fmt.Sprintf("Migrated: %d, Skipped (duplicates): %d", migrated, skipped))
 

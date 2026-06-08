@@ -17,10 +17,17 @@ type UserStore interface {
 	GetPassword(ctx context.Context, username string) (password string, err error)
 }
 
+// DeviceLimitStore — опциональный интерфейс. Реализуется store'ами которые
+// умеют возвращать лимит устройств. Если store не реализует — лимит = 0 (без ограничений).
+type DeviceLimitStore interface {
+	GetMaxDevices(ctx context.Context, username string) (int, error)
+}
+
 type cacheEntry struct {
-	password  string
-	expiresAt time.Time
-	notFound  bool // негативный кэш
+	password   string
+	maxDevices int
+	expiresAt  time.Time
+	notFound   bool // негативный кэш
 }
 
 type Authenticator struct {
@@ -44,32 +51,44 @@ func New(store UserStore, cacheTTL time.Duration) *Authenticator {
 	return a
 }
 
+// CheckResult — расширенный результат auth.
+type CheckResult struct {
+	Username   string
+	MaxDevices int // 0 = unlimited
+}
+
 func (a *Authenticator) Check(r *http.Request) string {
+	res := a.CheckExt(r)
+	return res.Username
+}
+
+// CheckExt возвращает username и device limit.
+func (a *Authenticator) CheckExt(r *http.Request) CheckResult {
 	hdr := r.Header.Get("Proxy-Authorization")
 	if !strings.HasPrefix(hdr, "Basic ") {
-		return ""
+		return CheckResult{}
 	}
 	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(hdr, "Basic "))
 	if err != nil {
-		return ""
+		return CheckResult{}
 	}
 	parts := strings.SplitN(string(decoded), ":", 2)
 	if len(parts) != 2 {
-		return ""
+		return CheckResult{}
 	}
 	username, password := parts[0], parts[1]
 
-	stored, ok := a.lookup(r.Context(), username)
+	stored, max, ok := a.lookup(r.Context(), username)
 	if !ok {
-		return ""
+		return CheckResult{}
 	}
 	if subtle.ConstantTimeCompare([]byte(password), []byte(stored)) != 1 {
-		return ""
+		return CheckResult{}
 	}
-	return username
+	return CheckResult{Username: username, MaxDevices: max}
 }
 
-func (a *Authenticator) lookup(ctx context.Context, username string) (string, bool) {
+func (a *Authenticator) lookup(ctx context.Context, username string) (string, int, bool) {
 	// Читаем из кэша
 	a.mu.RLock()
 	entry, hit := a.cache[username]
@@ -77,20 +96,27 @@ func (a *Authenticator) lookup(ctx context.Context, username string) (string, bo
 
 	if hit && time.Now().Before(entry.expiresAt) {
 		if entry.notFound {
-			return "", false
+			return "", 0, false
 		}
-		return entry.password, true
+		return entry.password, entry.maxDevices, true
 	}
 
 	// Промах — идём в store
 	pw, err := a.store.GetPassword(ctx, username)
 	if err != nil {
 		slog.Warn("auth: store error", "user", username, "err", err)
-		// При ошибке БД используем протухший кэш если есть
 		if hit && !entry.notFound {
-			return entry.password, true
+			return entry.password, entry.maxDevices, true
 		}
-		return "", false
+		return "", 0, false
+	}
+
+	// Опционально читаем device limit, если store его поддерживает
+	maxDevices := 0
+	if dls, ok := a.store.(DeviceLimitStore); ok && pw != "" {
+		if md, err := dls.GetMaxDevices(ctx, username); err == nil {
+			maxDevices = md
+		}
 	}
 
 	exp := time.Now().Add(a.ttl)
@@ -98,11 +124,11 @@ func (a *Authenticator) lookup(ctx context.Context, username string) (string, bo
 	if pw == "" {
 		a.cache[username] = cacheEntry{notFound: true, expiresAt: exp}
 	} else {
-		a.cache[username] = cacheEntry{password: pw, expiresAt: exp}
+		a.cache[username] = cacheEntry{password: pw, maxDevices: maxDevices, expiresAt: exp}
 	}
 	a.mu.Unlock()
 
-	return pw, pw != ""
+	return pw, maxDevices, pw != ""
 }
 
 // Invalidate сбрасывает кэш для конкретного пользователя.

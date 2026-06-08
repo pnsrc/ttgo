@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,16 +20,19 @@ func RunWizard(paths Paths) error {
 	app.SetRoot(pages, true)
 
 	var (
-		hostname  string
+		hostname   string
 		listenAddr string
-		tlsType   int // 0=letsencrypt, 1=self-signed, 2=custom
-		email     string
-		certPath  string
-		keyPath   string
-		storeType int // 0=file, 1=sqlite, 2=postgres
-		storeDSN  string
-		username  string
-		password  string
+		tlsType    int // 0=letsencrypt, 1=self-signed, 2=custom
+		email      string
+		certPath   string
+		keyPath    string
+		storeType  int // 0=sqlite, 1=file, 2=postgres
+		storeDSN   string
+		enableAdmin bool
+		adminAddr  string
+		adminToken string
+		username   string
+		password   string
 	)
 
 	// ── helpers ──────────────────────────────────────────────────────────────
@@ -119,15 +124,45 @@ func RunWizard(paths Paths) error {
 			summary.WriteString("  Custom certificate verified OK\n")
 		}
 
-		// Write credentials.toml
-		summary.WriteString("\n[green]Writing credentials.toml...[white]\n")
-		if err := saveCreds(paths.Creds, []credEntry{{Username: username, Password: password}}); err != nil {
-			showErr("Write credentials: " + err.Error())
-			return
+		storeTypeName := []string{"sqlite", "file", "postgres"}[storeType]
+
+		// Auto DSN если пустой
+		if storeDSN == "" {
+			switch storeTypeName {
+			case "sqlite":
+				storeDSN = filepath.Join(filepath.Dir(paths.VPN), "users.db")
+			}
 		}
 
+		// Создаём первого юзера в выбранном store
+		summary.WriteString(fmt.Sprintf("\n[green]Initializing %s store...[white]\n", storeTypeName))
+		var userStore UserStore
+		switch storeTypeName {
+		case "sqlite":
+			userStore, err := NewSQLiteStore(storeDSN)
+			if err != nil {
+				showErr("SQLite init: " + err.Error())
+				return
+			}
+			if err := userStore.Add(username, password); err != nil {
+				showErr("Add user: " + err.Error())
+				return
+			}
+			summary.WriteString(fmt.Sprintf("  Database: %s\n  User %q created\n", storeDSN, username))
+		case "file":
+			userStore = NewFileStore(paths.Creds)
+			if err := saveCreds(paths.Creds, []credEntry{{Username: username, Password: password}}); err != nil {
+				showErr("Write credentials: " + err.Error())
+				return
+			}
+			summary.WriteString(fmt.Sprintf("  credentials.toml: %s\n  User %q created\n", paths.Creds, username))
+		case "postgres":
+			summary.WriteString("  [yellow]Postgres: create user manually with psql[white]\n")
+		}
+		_ = userStore
+
 		// Write hosts.toml
-		summary.WriteString("[green]Writing hosts.toml...[white]\n")
+		summary.WriteString("\n[green]Writing hosts.toml...[white]\n")
 		hf := &hostsFile{
 			MainHosts: []hostEntry{{
 				Hostname:       hostname,
@@ -147,7 +182,22 @@ func RunWizard(paths Paths) error {
 
 		// Write vpn.toml
 		summary.WriteString("[green]Writing vpn.toml...[white]\n")
-		storeTypeName := []string{"file", "sqlite", "postgres"}[storeType]
+		credLine := ""
+		if storeTypeName == "file" {
+			credLine = fmt.Sprintf("credentials_file = %q\n", paths.Creds)
+		}
+		adminSection := ""
+		if enableAdmin {
+			if adminToken == "" {
+				adminToken = randomToken(32)
+			}
+			if adminAddr == "" {
+				adminAddr = "127.0.0.1:9090"
+			}
+			adminSection = fmt.Sprintf("\n[admin]\naddress = %q\ntoken   = %q\n",
+				adminAddr, adminToken)
+		}
+
 		vpnContent := fmt.Sprintf(`listen_address = %q
 ipv6_available = false
 allow_private_network_connections = false
@@ -158,8 +208,7 @@ connection_establishment_timeout_secs = 30
 tcp_connections_timeout_secs = 604800
 udp_connections_timeout_secs = 300
 
-credentials_file = %q
-rules_file = ""
+%srules_file = ""
 
 auth_failure_status_code = 407
 store_type = %q
@@ -170,7 +219,7 @@ cache_ttl_secs = 30
 max_concurrent_streams = 1000
 initial_stream_window_size = 131072
 max_frame_size = 16384
-`, listenAddr, paths.Creds, storeTypeName, storeDSN)
+%s`, listenAddr, credLine, storeTypeName, storeDSN, adminSection)
 
 		if err := os.WriteFile(paths.VPN, []byte(vpnContent), 0644); err != nil {
 			showErr("Write vpn.toml: " + err.Error())
@@ -178,7 +227,17 @@ max_frame_size = 16384
 		}
 
 		summary.WriteString("\n[yellow]Config files written:[white]\n")
-		summary.WriteString(fmt.Sprintf("  %s\n  %s\n  %s\n", paths.VPN, paths.Hosts, paths.Creds))
+		summary.WriteString(fmt.Sprintf("  %s\n  %s\n", paths.VPN, paths.Hosts))
+		if storeTypeName == "file" {
+			summary.WriteString(fmt.Sprintf("  %s\n", paths.Creds))
+		}
+		if storeTypeName == "sqlite" {
+			summary.WriteString(fmt.Sprintf("  %s\n", storeDSN))
+		}
+		if enableAdmin {
+			summary.WriteString(fmt.Sprintf("\n[yellow]Admin API:[white]  %s\n  token: %s\n",
+				adminAddr, adminToken))
+		}
 		summary.WriteString("\n[green]Run the server:[white]\n")
 		summary.WriteString(fmt.Sprintf("  trusttunnel_endpoint %s %s\n", paths.VPN, paths.Hosts))
 
@@ -201,7 +260,7 @@ max_frame_size = 16384
 			applyConfig()
 		}).
 		AddButton("← Back", func() { pages.SwitchToPage("page3") })
-	page4Form.SetBorder(true).SetTitle(" Step 4/4: First User ")
+	page4Form.SetBorder(true).SetTitle(" Step 5/5: First User ")
 	pages.AddPage("page4", wrap("First User", page4Form), true, false)
 
 	// ── page 3a: custom cert paths ───────────────────────────────────────────
@@ -220,7 +279,7 @@ max_frame_size = 16384
 			pages.SwitchToPage("page4")
 		}).
 		AddButton("← Back", func() { pages.SwitchToPage("page3") })
-	page3aForm.SetBorder(true).SetTitle(" Step 3/4: Custom Certificate Paths ")
+	page3aForm.SetBorder(true).SetTitle(" Step 4/5: Custom Certificate Paths ")
 	pages.AddPage("page3a", wrap("Custom Certificate", page3aForm), true, false)
 
 	// ── page 3: TLS type ─────────────────────────────────────────────────────
@@ -245,31 +304,51 @@ max_frame_size = 16384
 				pages.SwitchToPage("page4")
 			}
 		}).
-		AddButton("← Back", func() { pages.SwitchToPage("page2") })
-	page3Form.SetBorder(true).SetTitle(" Step 3/4: TLS Certificate ")
+		AddButton("← Back", func() { pages.SwitchToPage("page2b") })
+	page3Form.SetBorder(true).SetTitle(" Step 4/5: TLS Certificate ")
 	pages.AddPage("page3", wrap("TLS Certificate", page3Form), true, false)
 
 	// ── page 2: store + listen addr ──────────────────────────────────────────
 
 	var page2Form *tview.Form
 	page2Form = tview.NewForm().
-		AddInputField("Listen address", "0.0.0.0:443", 25, nil, func(v string) { listenAddr = v }).
+		AddInputField("Listen address", "0.0.0.0:443", 25, nil, nil).
 		AddDropDown("User store", []string{
-			"file  (credentials.toml)",
-			"sqlite  (local DB)",
+			"sqlite    (recommended — local DB, hot user management)",
+			"file      (credentials.toml, polled every 10s)",
 			"postgres  (remote DB)",
 		}, 0, func(_ string, idx int) { storeType = idx }).
-		AddInputField("Store DSN (sqlite path / postgres url)", "", 50, nil, func(v string) { storeDSN = v }).
+		AddInputField("Store DSN (leave empty for default)", "", 50, nil, nil).
 		AddButton("Next →", func() {
 			listenAddr = strings.TrimSpace(page2Form.GetFormItem(0).(*tview.InputField).GetText())
+			storeDSN = strings.TrimSpace(page2Form.GetFormItem(2).(*tview.InputField).GetText())
 			if listenAddr == "" {
 				listenAddr = "0.0.0.0:443"
 			}
-			pages.SwitchToPage("page3")
+			pages.SwitchToPage("page2b")
 		}).
 		AddButton("← Back", func() { pages.SwitchToPage("page1") })
-	page2Form.SetBorder(true).SetTitle(" Step 2/4: Server Settings ")
-	pages.AddPage("page2", wrap("Server Settings", page2Form), true, false)
+	page2Form.SetBorder(true).SetTitle(" Step 2/5: Server & Store ")
+	pages.AddPage("page2", wrap("Server & Store", page2Form), true, false)
+
+	// ── page 2b: admin API ───────────────────────────────────────────────────
+
+	var page2bForm *tview.Form
+	page2bForm = tview.NewForm().
+		AddCheckbox("Enable Admin API", true, func(v bool) { enableAdmin = v }).
+		AddInputField("Admin address", "127.0.0.1:9090", 25, nil, nil).
+		AddInputField("Token (leave empty to auto-generate)", "", 50, nil, nil).
+		AddButton("Next →", func() {
+			adminAddr = strings.TrimSpace(page2bForm.GetFormItem(1).(*tview.InputField).GetText())
+			adminToken = strings.TrimSpace(page2bForm.GetFormItem(2).(*tview.InputField).GetText())
+			if adminAddr == "" {
+				adminAddr = "127.0.0.1:9090"
+			}
+			pages.SwitchToPage("page3")
+		}).
+		AddButton("← Back", func() { pages.SwitchToPage("page2") })
+	page2bForm.SetBorder(true).SetTitle(" Step 3/5: Admin API (sessions, traffic stats, kick) ")
+	pages.AddPage("page2b", wrap("Admin API", page2bForm), true, false)
 
 	// ── page 1: hostname ─────────────────────────────────────────────────────
 
@@ -294,11 +373,12 @@ max_frame_size = 16384
 		SetText(`
   Welcome to TrustTunnel Setup Wizard
 
-  This wizard will help you configure:
-    • Listen address and port
-    • TLS certificate (Let's Encrypt, self-signed, or custom)
-    • User store (file, SQLite, or PostgreSQL)
-    • First admin user
+  This wizard will configure:
+    1. Server hostname / IP
+    2. Listen address and user store (SQLite recommended)
+    3. Admin API for sessions, traffic stats, instant kick
+    4. TLS certificate (Let's Encrypt, self-signed, or custom)
+    5. First admin user
 
   Press Enter to begin.
 `).
@@ -321,8 +401,10 @@ max_frame_size = 16384
 			switch name {
 			case "page2":
 				pages.SwitchToPage("page1")
-			case "page3":
+			case "page2b":
 				pages.SwitchToPage("page2")
+			case "page3":
+				pages.SwitchToPage("page2b")
 			case "page3a":
 				pages.SwitchToPage("page3")
 			case "page4":
@@ -334,4 +416,11 @@ max_frame_size = 16384
 	})
 
 	return app.Run()
+}
+
+// randomToken returns a hex-encoded random token of n bytes.
+func randomToken(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

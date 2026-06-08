@@ -48,9 +48,10 @@ func main() {
 	cacheTTL := time.Duration(cfg.CacheTTLSecs) * time.Second
 	authn := auth.New(userStore, cacheTTL)
 
-	// При инвалидации credentials — слать GOAWAY всем активным соединениям юзера.
+	// При инвалидации credentials — помечаем соединения как revoked (клиент получит
+	// 407 с причиной на следующем запросе), затем через 2с GOAWAY + close.
 	auth.OnInvalidate = func(username string) {
-		server.GlobalConnTracker.KickUser(username)
+		server.GlobalConnTracker.KickUser(username, "Account suspended by administrator")
 	}
 
 	// Admin API (опционально, только если настроен в конфиге).

@@ -15,8 +15,9 @@ type credFile struct {
 }
 
 type credEntry struct {
-	Username string `toml:"username"`
-	Password string `toml:"password"`
+	Username   string `toml:"username"`
+	Password   string `toml:"password"`
+	MaxDevices int    `toml:"max_devices,omitempty"`
 }
 
 func loadCreds(path string) ([]credEntry, error) {
@@ -35,7 +36,11 @@ func saveCreds(path string, entries []credEntry) error {
 	for _, e := range entries {
 		sb.WriteString("[[client]]\n")
 		sb.WriteString(fmt.Sprintf("username = %q\n", e.Username))
-		sb.WriteString(fmt.Sprintf("password = %q\n\n", e.Password))
+		sb.WriteString(fmt.Sprintf("password = %q\n", e.Password))
+		if e.MaxDevices > 0 {
+			sb.WriteString(fmt.Sprintf("max_devices = %d\n", e.MaxDevices))
+		}
+		sb.WriteString("\n")
 	}
 	return os.WriteFile(path, []byte(sb.String()), 0600)
 }

@@ -21,6 +21,7 @@ const (
 	pseudoHostUDP   = "_udp2"
 	pseudoHostICMP  = "_icmp"
 	pseudoHostCheck = "_check"
+	pseudoHostP2P   = "_p2p"
 )
 
 type Options struct {
@@ -37,6 +38,7 @@ type Handler struct {
 	dialer  *net.Dialer
 	udpMux  *udpmux.Mux
 	icmpMux *icmpmux.Mux
+	p2p     *P2PBroker
 }
 
 func New(a *auth.Authenticator, re *rules.Engine, opts Options, udp *udpmux.Mux, icmp *icmpmux.Mux) *Handler {
@@ -54,6 +56,7 @@ func New(a *auth.Authenticator, re *rules.Engine, opts Options, udp *udpmux.Mux,
 		},
 		udpMux:  udp,
 		icmpMux: icmp,
+		p2p:     NewP2PBroker(),
 	}
 }
 
@@ -63,8 +66,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auth
-	username := h.auth.Check(r)
+	rawConn := server.RawConnFromContext(r.Context())
+
+	// Revocation check — до auth, чтобы клиент увидел 407 с причиной
+	// вместо просто разрыва соединения.
+	if revoked, reason := server.GlobalConnTracker.IsRevoked(rawConn); revoked {
+		w.Header().Set("Proxy-Authenticate", `Basic realm="TrustTunnel"`)
+		w.Header().Set("X-Revoke-Reason", reason)
+		http.Error(w, "Session revoked: "+reason, http.StatusProxyAuthRequired)
+		return
+	}
+
+	// Auth (расширенный — username + device limit)
+	authRes := h.auth.CheckExt(r)
+	username := authRes.Username
 	if username == "" {
 		if h.opts.AuthFailureCode == 405 {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -75,12 +90,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Регистрируем соединение для возможного GOAWAY при удалении юзера.
-	// Получаем raw net.Conn из контекста (установлен в ConnContextFunc).
-	if rawConn := server.RawConnFromContext(r.Context()); rawConn != nil {
-		tracker := server.GlobalConnTracker
-		tracker.Register(username, rawConn)
-		defer tracker.Unregister(username, rawConn)
+	// Device limit: проверяем что у юзера не больше maxDevices активных соединений.
+	// 0 = без ограничений. Проверяем только если это новое соединение.
+	if authRes.MaxDevices > 0 && rawConn != nil {
+		if !server.GlobalConnTracker.IsKnown(rawConn) {
+			active := server.GlobalConnTracker.CountUser(username)
+			if active >= authRes.MaxDevices {
+				w.Header().Set("Proxy-Authenticate", `Basic realm="TrustTunnel"`)
+				w.Header().Set("X-Revoke-Reason", "Device limit reached")
+				http.Error(w,
+					fmt.Sprintf("Device limit reached: %d/%d connections in use", active, authRes.MaxDevices),
+					http.StatusProxyAuthRequired)
+				return
+			}
+		}
+	}
+
+	// Регистрируем соединение в ConnTracker.
+	if rawConn != nil {
+		server.GlobalConnTracker.Register(username, rawConn)
+		defer server.GlobalConnTracker.Unregister(username, rawConn)
 	}
 
 	// Rules: IP + TLS client random из ClientHello
@@ -126,12 +155,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		sess.ICMP(h.icmpMux).ServeHTTP(w, r)
 
+	case pseudoHostP2P:
+		// P2P relay между двумя устройствами одного юзера в одной комнате.
+		h.p2p.Handle(w, r, username)
+
 	default:
 		h.handleTCPTunnel(w, r, target, username)
 	}
 }
 
 func (h *Handler) handleTCPTunnel(w http.ResponseWriter, r *http.Request, target, username string) {
+	rawConn := server.RawConnFromContext(r.Context())
 	if !h.opts.AllowPrivateNet {
 		host, _, _ := net.SplitHostPort(target)
 		if host == "" {
@@ -165,17 +199,21 @@ func (h *Handler) handleTCPTunnel(w http.ResponseWriter, r *http.Request, target
 	}
 
 	slog.Debug("tunnel open", "target", target, "user", username)
+	server.GlobalConnTracker.TunnelOpened(rawConn)
+	defer server.GlobalConnTracker.TunnelClosed(rawConn)
 
 	errCh := make(chan error, 2)
 	go func() {
-		_, err := io.Copy(conn, r.Body)
+		n, err := io.Copy(conn, r.Body)
+		server.GlobalConnTracker.AddBytes(rawConn, uint64(n), 0) // client → us
 		errCh <- err
 		if tc, ok := conn.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
 	}()
 	go func() {
-		_, err := copyFlush(w, conn)
+		n, err := copyFlush(w, conn)
+		server.GlobalConnTracker.AddBytes(rawConn, 0, uint64(n)) // us → client
 		errCh <- err
 	}()
 

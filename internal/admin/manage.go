@@ -17,6 +17,9 @@ func RunManage(paths Paths) error {
 		return fmt.Errorf("open user store: %w", err)
 	}
 
+	// Admin API client (опционально). Если не настроен — статистика будет недоступна.
+	adminAPI := AdminAPIFromVPN(paths)
+
 	app := tview.NewApplication()
 	pages := tview.NewPages()
 
@@ -24,9 +27,13 @@ func RunManage(paths Paths) error {
 
 	statusBar := tview.NewTextView().SetDynamicColors(true).SetText(" Ready")
 	hintsBar := tview.NewTextView().SetDynamicColors(true).
-		SetText("  [yellow]1[white] Users  [yellow]2[white] Certs  [yellow]3[white] Status  [yellow]Ctrl+C[white] Quit")
+		SetText("  [yellow]1[white] Users  [yellow]2[white] Sessions  [yellow]3[white] Certs  [yellow]4[white] Status  [yellow]Ctrl+C[white] Quit")
 
-	storeLabel := fmt.Sprintf("[gray]store: %s (%s)[white]", store.StoreType(), store.Location())
+	apiBadge := "[red]admin api: not configured[white]"
+	if adminAPI != nil {
+		apiBadge = "[green]admin api: " + adminAPI.Address + "[white]"
+	}
+	storeLabel := fmt.Sprintf("[gray]store: %s (%s)[white]  %s", store.StoreType(), store.Location(), apiBadge)
 	topBar := tview.NewTextView().SetDynamicColors(true).
 		SetText(fmt.Sprintf(" [aqua::b]TrustTunnel Admin[white]   %s", storeLabel))
 	topBar.SetBackgroundColor(tcell.ColorDarkSlateGray)
@@ -72,26 +79,75 @@ func RunManage(paths Paths) error {
 
 	usersTable := tview.NewTable().SetBorders(false).SetSelectable(true, false).SetFixed(1, 0)
 	usersTable.SetBorder(true).
-		SetTitle(fmt.Sprintf(" Users [%s]  [yellow](A)[white]dd  [yellow](D)[white]elete  [yellow](P)[white]assword  [yellow](R)[white]efresh ",
+		SetTitle(fmt.Sprintf(" Users [%s]  [yellow](A)[white]dd  [yellow](D)[white]elete  [yellow](P)[white]assword  [yellow](L)[white]imit  [yellow](R)[white]efresh ",
 			store.StoreType()))
 
 	refreshUsers := func() {
 		usersTable.Clear()
-		usersTable.SetCell(0, 0, tview.NewTableCell("[::b]USERNAME").
-			SetTextColor(tcell.ColorYellow).SetSelectable(false).SetExpansion(2))
-		usersTable.SetCell(0, 1, tview.NewTableCell("[::b]STORE").
-			SetTextColor(tcell.ColorYellow).SetSelectable(false))
+		headers := []string{"USERNAME", "DEVICES", "ACTIVE", "TUNNELS", "BYTES IN", "BYTES OUT"}
+		for i, h := range headers {
+			cell := tview.NewTableCell("[::b]" + h).
+				SetTextColor(tcell.ColorYellow).SetSelectable(false)
+			if i == 0 {
+				cell.SetExpansion(2)
+			}
+			usersTable.SetCell(0, i, cell)
+		}
 
 		entries, err := store.List()
 		if err != nil {
 			setStatus("Error: "+err.Error(), true)
 			return
 		}
+
+		// Запрашиваем статистику если admin API настроен
+		var statsByUser map[string]UserStats
+		if adminAPI != nil {
+			if stats, err := adminAPI.UserStats(); err == nil {
+				statsByUser = make(map[string]UserStats, len(stats))
+				for _, s := range stats {
+					statsByUser[s.Username] = s
+				}
+			}
+		}
+
 		for i, e := range entries {
 			usersTable.SetCell(i+1, 0, tview.NewTableCell(e.Username).SetExpansion(2))
-			usersTable.SetCell(i+1, 1, tview.NewTableCell(store.StoreType()).
-				SetTextColor(tcell.ColorGray))
+
+			// DEVICES limit (из store, не из API)
+			devLabel := "∞"
+			if e.MaxDevices > 0 {
+				devLabel = fmt.Sprintf("%d", e.MaxDevices)
+			}
+			usersTable.SetCell(i+1, 1, tview.NewTableCell(devLabel))
+
+			s, ok := statsByUser[e.Username]
+			if !ok {
+				for _, col := range []int{2, 3, 4, 5} {
+					usersTable.SetCell(i+1, col, tview.NewTableCell("–").
+						SetTextColor(tcell.ColorGray))
+				}
+				continue
+			}
+
+			activeColor := tcell.ColorGray
+			if s.ActiveConns > 0 {
+				activeColor = tcell.ColorGreen
+			}
+			// Подсветка красным если упёрся в лимит
+			activeLabel := fmt.Sprintf("%d", s.ActiveConns)
+			if e.MaxDevices > 0 && s.ActiveConns >= e.MaxDevices {
+				activeColor = tcell.ColorRed
+				activeLabel = fmt.Sprintf("%d / %d", s.ActiveConns, e.MaxDevices)
+			}
+			usersTable.SetCell(i+1, 2, tview.NewTableCell(activeLabel).
+				SetTextColor(activeColor))
+			usersTable.SetCell(i+1, 3, tview.NewTableCell(fmt.Sprintf("%d / %d",
+				s.OpenTunnels, s.TotalTunnels)))
+			usersTable.SetCell(i+1, 4, tview.NewTableCell(humanBytes(s.BytesIn)))
+			usersTable.SetCell(i+1, 5, tview.NewTableCell(humanBytes(s.BytesOut)))
 		}
+
 		if len(entries) == 0 {
 			usersTable.SetCell(1, 0, tview.NewTableCell("(no users)").
 				SetTextColor(tcell.ColorGray).SetSelectable(false))
@@ -101,18 +157,30 @@ func RunManage(paths Paths) error {
 	buildAddForm := func() {
 		form := tview.NewForm().
 			AddInputField("Username", "", 30, nil, nil).
-			AddPasswordField("Password", "", 30, '*', nil)
+			AddPasswordField("Password", "", 30, '*', nil).
+			AddInputField("Max devices (0 = unlimited)", "0", 10, nil, nil)
 		form.SetBorder(true).SetTitle(" Add User ")
 		form.AddButton("Add", func() {
 			u := strings.TrimSpace(form.GetFormItem(0).(*tview.InputField).GetText())
 			p := form.GetFormItem(1).(*tview.InputField).GetText()
+			limRaw := strings.TrimSpace(form.GetFormItem(2).(*tview.InputField).GetText())
 			if u == "" || p == "" {
 				showModal("Username and password cannot be empty")
 				return
 			}
+			var limit int
+			if limRaw != "" {
+				if _, err := fmt.Sscanf(limRaw, "%d", &limit); err != nil || limit < 0 {
+					showModal("Invalid device limit")
+					return
+				}
+			}
 			if err := store.Add(u, p); err != nil {
 				showModal("Error: " + err.Error())
 				return
+			}
+			if limit > 0 {
+				_ = store.SetMaxDevices(u, limit)
 			}
 			pages.RemovePage("adduser")
 			refreshUsers()
@@ -123,7 +191,7 @@ func RunManage(paths Paths) error {
 			pages.RemovePage("adduser")
 			app.SetFocus(usersTable)
 		})
-		pages.AddPage("adduser", centered(form, 50, 12), true, true)
+		pages.AddPage("adduser", centered(form, 55, 14), true, true)
 		app.SetFocus(form)
 	}
 
@@ -159,6 +227,39 @@ func RunManage(paths Paths) error {
 		app.SetFocus(form)
 	}
 
+	buildLimitForm := func(username string, current int) {
+		form := tview.NewForm().
+			AddInputField("Max devices (0 = unlimited)",
+				fmt.Sprintf("%d", current), 10, nil, nil)
+		form.SetBorder(true).SetTitle(fmt.Sprintf(" Device limit: %s ", username))
+		form.AddButton("Save", func() {
+			raw := strings.TrimSpace(form.GetFormItem(0).(*tview.InputField).GetText())
+			var n int
+			if _, err := fmt.Sscanf(raw, "%d", &n); err != nil || n < 0 {
+				showModal("Invalid number")
+				return
+			}
+			if err := store.SetMaxDevices(username, n); err != nil {
+				showModal("Error: " + err.Error())
+				return
+			}
+			pages.RemovePage("limit")
+			refreshUsers()
+			if n == 0 {
+				setStatus(fmt.Sprintf("Limit for %q removed", username), false)
+			} else {
+				setStatus(fmt.Sprintf("Limit for %q set to %d", username, n), false)
+			}
+			app.SetFocus(usersTable)
+		})
+		form.AddButton("Cancel", func() {
+			pages.RemovePage("limit")
+			app.SetFocus(usersTable)
+		})
+		pages.AddPage("limit", centered(form, 50, 10), true, true)
+		app.SetFocus(form)
+	}
+
 	usersTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		row, _ := usersTable.GetSelection()
 		switch event.Rune() {
@@ -178,8 +279,12 @@ func RunManage(paths Paths) error {
 					showModal("Error: " + err.Error())
 					return
 				}
+				// Кикаем активные соединения через admin API если он доступен
+				if adminAPI != nil {
+					_ = adminAPI.KickUser(username)
+				}
 				refreshUsers()
-				setStatus(fmt.Sprintf("User %q deleted", username), false)
+				setStatus(fmt.Sprintf("User %q deleted and disconnected", username), false)
 			})
 			return nil
 		case 'p', 'P':
@@ -192,6 +297,25 @@ func RunManage(paths Paths) error {
 			}
 			buildChangePassForm(username)
 			return nil
+		case 'l', 'L':
+			if row < 1 {
+				return event
+			}
+			username := usersTable.GetCell(row, 0).Text
+			if username == "" || username == "(no users)" {
+				return event
+			}
+			// Текущий лимит из store
+			entries, _ := store.List()
+			current := 0
+			for _, e := range entries {
+				if e.Username == username {
+					current = e.MaxDevices
+					break
+				}
+			}
+			buildLimitForm(username, current)
+			return nil
 		case 'r', 'R':
 			refreshUsers()
 			setStatus("Refreshed", false)
@@ -202,6 +326,105 @@ func RunManage(paths Paths) error {
 
 	usersPage := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(usersTable, 0, 1, true)
+
+	// ══════════════════════════════════════════════════════════════════════════
+	// PAGE: SESSIONS — live TLS connections + traffic
+	// ══════════════════════════════════════════════════════════════════════════
+
+	sessionsTable := tview.NewTable().SetBorders(false).SetSelectable(true, false).SetFixed(1, 0)
+	sessionsTable.SetBorder(true).SetTitle(" Sessions  [yellow](k)[white]ick one  [yellow](K)[white]ick all by user  [yellow](R)[white]efresh ")
+
+	refreshSessions := func() {
+		sessionsTable.Clear()
+		headers := []string{"USER", "REMOTE", "UPTIME", "TUNNELS", "IN", "OUT"}
+		for i, h := range headers {
+			sessionsTable.SetCell(0, i, tview.NewTableCell("[::b]"+h).
+				SetTextColor(tcell.ColorYellow).SetSelectable(false))
+		}
+
+		if adminAPI == nil {
+			sessionsTable.SetCell(1, 0, tview.NewTableCell(
+				"[red]Admin API not configured. Add [admin] section to vpn.toml.[white]").
+				SetSelectable(false))
+			return
+		}
+
+		sessions, err := adminAPI.Sessions()
+		if err != nil {
+			sessionsTable.SetCell(1, 0, tview.NewTableCell("[red]Error: "+err.Error()+"[white]").
+				SetSelectable(false))
+			return
+		}
+		if len(sessions) == 0 {
+			sessionsTable.SetCell(1, 0, tview.NewTableCell("(no active sessions)").
+				SetTextColor(tcell.ColorGray).SetSelectable(false))
+			return
+		}
+
+		for i, s := range sessions {
+			uptime := time.Since(s.ConnectedAt).Round(time.Second).String()
+			sessionsTable.SetCell(i+1, 0, tview.NewTableCell(s.Username))
+			sessionsTable.SetCell(i+1, 1, tview.NewTableCell(s.RemoteAddr).
+				SetTextColor(tcell.ColorGray))
+			sessionsTable.SetCell(i+1, 2, tview.NewTableCell(uptime))
+			sessionsTable.SetCell(i+1, 3, tview.NewTableCell(fmt.Sprintf("%d / %d",
+				s.OpenTunnels, s.TotalTunnels)))
+			sessionsTable.SetCell(i+1, 4, tview.NewTableCell(humanBytes(s.BytesIn)))
+			sessionsTable.SetCell(i+1, 5, tview.NewTableCell(humanBytes(s.BytesOut)))
+		}
+	}
+
+	sessionsTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Rune() {
+		case 'k':
+			// lowercase k — kick ОДНУ выбранную сессию
+			row, _ := sessionsTable.GetSelection()
+			if row < 1 || adminAPI == nil {
+				return event
+			}
+			username := sessionsTable.GetCell(row, 0).Text
+			remote := sessionsTable.GetCell(row, 1).Text
+			if username == "" || remote == "" {
+				return event
+			}
+			confirm(fmt.Sprintf("Kick this session?\n\nUser:   %s\nRemote: %s", username, remote), func() {
+				if err := adminAPI.KickSession(username, remote); err != nil {
+					showModal("Kick error: " + err.Error())
+					return
+				}
+				setStatus(fmt.Sprintf("Kicked session %s", remote), false)
+				refreshSessions()
+			})
+			return nil
+		case 'K':
+			// uppercase K — kick ВСЕ сессии юзера
+			row, _ := sessionsTable.GetSelection()
+			if row < 1 || adminAPI == nil {
+				return event
+			}
+			username := sessionsTable.GetCell(row, 0).Text
+			if username == "" {
+				return event
+			}
+			confirm(fmt.Sprintf("Kick ALL sessions of %q?", username), func() {
+				if err := adminAPI.KickUser(username); err != nil {
+					showModal("Kick error: " + err.Error())
+					return
+				}
+				setStatus(fmt.Sprintf("Kicked all sessions of %q", username), false)
+				refreshSessions()
+			})
+			return nil
+		case 'r', 'R':
+			refreshSessions()
+			setStatus("Refreshed", false)
+			return nil
+		}
+		return event
+	})
+
+	sessionsPage := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(sessionsTable, 0, 1, true)
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// PAGE: CERTIFICATES
@@ -406,6 +629,7 @@ func RunManage(paths Paths) error {
 	// ── assemble ──────────────────────────────────────────────────────────────
 
 	pages.AddPage("users", usersPage, true, true)
+	pages.AddPage("sessions", sessionsPage, true, false)
 	pages.AddPage("certs", certsPage, true, false)
 	pages.AddPage("status", statusPage, true, false)
 
@@ -419,7 +643,7 @@ func RunManage(paths Paths) error {
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		front, _ := pages.GetFrontPage()
-		if front != "users" && front != "certs" && front != "status" {
+		if front != "users" && front != "sessions" && front != "certs" && front != "status" {
 			return event
 		}
 		switch event.Rune() {
@@ -428,16 +652,34 @@ func RunManage(paths Paths) error {
 			refreshUsers()
 			app.SetFocus(usersTable)
 		case '2':
+			pages.SwitchToPage("sessions")
+			refreshSessions()
+			app.SetFocus(sessionsTable)
+		case '3':
 			pages.SwitchToPage("certs")
 			refreshCerts()
 			app.SetFocus(certsText)
-		case '3':
+		case '4':
 			pages.SwitchToPage("status")
 			refreshStatus()
 			app.SetFocus(statusText)
 		}
 		return event
 	})
+
+	// Авто-рефреш сессий каждые 3 секунды если открыта вкладка sessions.
+	go func() {
+		for {
+			time.Sleep(3 * time.Second)
+			app.QueueUpdateDraw(func() {
+				if front, _ := pages.GetFrontPage(); front == "sessions" {
+					refreshSessions()
+				} else if front == "users" {
+					refreshUsers()
+				}
+			})
+		}
+	}()
 
 	refreshUsers()
 	return app.Run()
@@ -484,4 +726,27 @@ func addOrUpdateHost(paths Paths, hostname, certPath, keyPath string) {
 		hf.PingHosts = append(hf.PingHosts, entry)
 	}
 	saveHosts(paths.Hosts, hf)
+}
+
+// humanBytes форматирует размер в KB/MB/GB.
+func humanBytes(n uint64) string {
+	const (
+		_  = iota
+		KB = 1 << (10 * iota)
+		MB
+		GB
+		TB
+	)
+	switch {
+	case n >= TB:
+		return fmt.Sprintf("%.2f TB", float64(n)/TB)
+	case n >= GB:
+		return fmt.Sprintf("%.2f GB", float64(n)/GB)
+	case n >= MB:
+		return fmt.Sprintf("%.2f MB", float64(n)/MB)
+	case n >= KB:
+		return fmt.Sprintf("%.1f KB", float64(n)/KB)
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
