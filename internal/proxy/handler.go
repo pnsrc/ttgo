@@ -77,9 +77,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auth (расширенный — username + device limit)
+	// Auth (расширенный — username + device limit + lifecycle)
 	authRes := h.auth.CheckExt(r)
 	username := authRes.Username
+
+	// Lifecycle ошибка (юзер существует, но отключён/просрочен/над лимитом) —
+	// возвращаем 407 с понятной причиной.
+	if username != "" && authRes.Deny != auth.DenyNone {
+		w.Header().Set("Proxy-Authenticate", `Basic realm="TrustTunnel"`)
+		w.Header().Set("X-Revoke-Reason", string(authRes.Deny))
+		http.Error(w, string(authRes.Deny), http.StatusProxyAuthRequired)
+		return
+	}
+
 	if username == "" {
 		if h.opts.AuthFailureCode == 405 {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)

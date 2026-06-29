@@ -17,8 +17,16 @@ type UserStore interface {
 	ChangePassword(username, password string) error
 	SetMaxDevices(username string, n int) error
 	StoreType() string
-	// DSN / path — для отображения в TUI
 	Location() string
+}
+
+// LifecycleAdmin — опциональные lifecycle-операции (sqlite/postgres).
+type LifecycleAdmin interface {
+	SetEnabled(username string, enabled bool) error
+	SetExpiresAt(username string, expiresUnix int64) error
+	SetTrafficLimit(username string, bytes uint64) error
+	ResetTraffic(username string) error
+	GetLifecycle(username string) (enabled bool, expiresAt int64, limit, used uint64, err error)
 }
 
 // ── File store ────────────────────────────────────────────────────────────────
@@ -88,7 +96,9 @@ func (s *sqliteUserStore) Location() string   { return s.dsn }
 
 func (s *sqliteUserStore) List() ([]credEntry, error) {
 	rows, err := s.db.Query(
-		`SELECT username, password, max_devices FROM users ORDER BY username`)
+		`SELECT username, password, max_devices, enabled, expires_at,
+		        traffic_limit_bytes, traffic_used_bytes
+		 FROM users ORDER BY username`)
 	if err != nil {
 		return nil, err
 	}
@@ -96,12 +106,68 @@ func (s *sqliteUserStore) List() ([]credEntry, error) {
 	var out []credEntry
 	for rows.Next() {
 		var e credEntry
-		if err := rows.Scan(&e.Username, &e.Password, &e.MaxDevices); err != nil {
+		var enabled int
+		var limit, used int64
+		if err := rows.Scan(&e.Username, &e.Password, &e.MaxDevices,
+			&enabled, &e.ExpiresAt, &limit, &used); err != nil {
 			return nil, err
 		}
+		e.Enabled = enabled != 0
+		e.TrafficLimit = uint64(limit)
+		e.TrafficUsed = uint64(used)
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// Add создаёт юзера со значениями по умолчанию (enabled=1).
+func (s *sqliteUserStore) SetEnabled(username string, enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	res, err := s.db.Exec(`UPDATE users SET enabled = ? WHERE username = ?`, v, username)
+	return notFoundIfZero(res, err, username)
+}
+
+func (s *sqliteUserStore) SetExpiresAt(username string, expiresUnix int64) error {
+	res, err := s.db.Exec(`UPDATE users SET expires_at = ? WHERE username = ?`, expiresUnix, username)
+	return notFoundIfZero(res, err, username)
+}
+
+func (s *sqliteUserStore) SetTrafficLimit(username string, bytes uint64) error {
+	res, err := s.db.Exec(`UPDATE users SET traffic_limit_bytes = ? WHERE username = ?`, bytes, username)
+	return notFoundIfZero(res, err, username)
+}
+
+func (s *sqliteUserStore) ResetTraffic(username string) error {
+	res, err := s.db.Exec(`UPDATE users SET traffic_used_bytes = 0 WHERE username = ?`, username)
+	return notFoundIfZero(res, err, username)
+}
+
+func (s *sqliteUserStore) GetLifecycle(username string) (bool, int64, uint64, uint64, error) {
+	var enabled int
+	var expAt int64
+	var limit, used int64
+	err := s.db.QueryRow(
+		`SELECT enabled, expires_at, traffic_limit_bytes, traffic_used_bytes
+		 FROM users WHERE username = ?`, username,
+	).Scan(&enabled, &expAt, &limit, &used)
+	if err != nil {
+		return false, 0, 0, 0, err
+	}
+	return enabled != 0, expAt, uint64(limit), uint64(used), nil
+}
+
+func notFoundIfZero(res sql.Result, err error, username string) error {
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("user %q not found", username)
+	}
+	return nil
 }
 
 func (s *sqliteUserStore) SetMaxDevices(username string, n int) error {

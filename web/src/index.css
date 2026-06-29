@@ -6,16 +6,68 @@
   color-scheme: dark;
 }
 
+html, body, #root {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  min-height: 100vh;
+  background: #0a0a0a;
+  color: #fafafa;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-feature-settings: 'cv11', 'ss01';
+  -webkit-font-smoothing: antialiased;
 }
 
-table {
-  border-collapse: collapse;
+* {
+  -webkit-tap-highlight-color: transparent;
 }
 
-input,
-button {
-  font-family: inherit;
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3a;
+}
+
+@layer components {
+  .input {
+    @apply w-full bg-bg-elevated border border-border rounded-md px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-100 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply btn bg-zinc-100 text-zinc-900 hover:bg-white active:scale-[0.98];
+  }
+
+  .btn-secondary {
+    @apply btn bg-bg-elevated text-zinc-200 border border-border hover:bg-zinc-800 hover:border-zinc-600;
+  }
+
+  .btn-ghost {
+    @apply btn text-zinc-400 hover:text-zinc-100 hover:bg-bg-elevated;
+  }
+
+  .btn-danger {
+    @apply btn bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 hover:border-red-500/50;
+  }
+
+  .card {
+    @apply bg-bg-subtle border border-border rounded-lg;
+  }
+
+  .label {
+    @apply block text-xs font-medium text-zinc-400 mb-1.5;
+  }
 }

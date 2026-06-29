@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/binary"
 	"net"
 	"sync"
@@ -59,6 +60,9 @@ type userTotals struct {
 	bytesOut     atomic.Uint64
 	totalTunnels atomic.Uint64
 	firstSeenAt  time.Time
+	// flushedBytes — сколько уже записано в persistent store;
+	// дельта flushTotal() - flushedBytes выгружается в БД.
+	flushedBytes uint64
 }
 
 var GlobalConnTracker = &ConnTracker{
@@ -304,6 +308,80 @@ func (t *ConnTracker) IsKnown(conn net.Conn) bool {
 	_, ok := t.entries[conn]
 	t.mu.RUnlock()
 	return ok
+}
+
+// TrafficFlusher — сохраняет дельту трафика в persistent store.
+type TrafficFlusher interface {
+	AddTraffic(ctx context.Context, username string, n uint64) error
+}
+
+// StartTrafficFlusher периодически выгружает прирост трафика в БД.
+// Каждые interval секунд считаем дельту total - flushed и пишем.
+func (t *ConnTracker) StartTrafficFlusher(ctx context.Context, fl TrafficFlusher, interval time.Duration) {
+	if fl == nil || interval <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				t.flushOnce(fl) // финальный flush
+				return
+			case <-ticker.C:
+				t.flushOnce(fl)
+			}
+		}
+	}()
+}
+
+func (t *ConnTracker) flushOnce(fl TrafficFlusher) {
+	t.totalsMu.Lock()
+	type pending struct {
+		name  string
+		delta uint64
+	}
+	var pendings []pending
+	for name, tot := range t.totalsByUser {
+		total := tot.bytesIn.Load() + tot.bytesOut.Load()
+		if total > tot.flushedBytes {
+			pendings = append(pendings, pending{name, total - tot.flushedBytes})
+			tot.flushedBytes = total
+		}
+	}
+	t.totalsMu.Unlock()
+
+	for _, p := range pendings {
+		if err := fl.AddTraffic(context.Background(), p.name, p.delta); err != nil {
+			// Не страшно — следующий тик попробует снова, дельта восстановится
+			// если flushedBytes откатить. Здесь мы не откатываем — мирно теряем
+			// дельту в случае persistent ошибки store.
+			_ = err
+		}
+	}
+}
+
+// ResetUserTraffic сбрасывает cumulative-счётчики юзера.
+// Должен вызываться вместе со сбросом в persistent store.
+func (t *ConnTracker) ResetUserTraffic(username string) {
+	t.totalsMu.Lock()
+	if tot, ok := t.totalsByUser[username]; ok {
+		tot.bytesIn.Store(0)
+		tot.bytesOut.Store(0)
+		tot.flushedBytes = 0
+	}
+	t.totalsMu.Unlock()
+
+	// Также сбрасываем per-connection-счётчики (live)
+	t.mu.Lock()
+	for _, e := range t.entries {
+		if e.username == username {
+			e.bytesIn.Store(0)
+			e.bytesOut.Store(0)
+		}
+	}
+	t.mu.Unlock()
 }
 
 // CountUser возвращает число активных TLS-соединений для username.

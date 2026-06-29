@@ -23,11 +23,24 @@ type DeviceLimitStore interface {
 	GetMaxDevices(ctx context.Context, username string) (int, error)
 }
 
+// LifecycleStore — расширенные поля для квот и сроков действия аккаунта.
+// Опциональный интерфейс, реализуется только sqlite/postgres.
+type LifecycleStore interface {
+	// GetLifecycle возвращает enabled, expiresAt (Unix, 0 = бессрочно),
+	// trafficLimitBytes (0 = безлимит), trafficUsedBytes.
+	GetLifecycle(ctx context.Context, username string) (enabled bool, expiresAt int64, trafficLimit, trafficUsed uint64, err error)
+}
+
 type cacheEntry struct {
-	password   string
-	maxDevices int
-	expiresAt  time.Time
-	notFound   bool // негативный кэш
+	password         string
+	maxDevices       int
+	enabled          bool
+	expiresAt        int64
+	trafficLimit     uint64
+	trafficUsed      uint64
+	hasLifecycle     bool
+	cacheExpiresAt   time.Time
+	notFound         bool // негативный кэш
 }
 
 type Authenticator struct {
@@ -51,10 +64,22 @@ func New(store UserStore, cacheTTL time.Duration) *Authenticator {
 	return a
 }
 
+// DenyReason — причина отказа в auth.
+type DenyReason string
+
+const (
+	DenyNone          DenyReason = ""
+	DenyBadCreds      DenyReason = "Invalid credentials"
+	DenyDisabled      DenyReason = "Account disabled"
+	DenyExpired       DenyReason = "Account expired"
+	DenyTrafficLimit  DenyReason = "Traffic limit reached"
+)
+
 // CheckResult — расширенный результат auth.
 type CheckResult struct {
-	Username   string
-	MaxDevices int // 0 = unlimited
+	Username    string
+	MaxDevices  int    // 0 = unlimited
+	Deny        DenyReason
 }
 
 func (a *Authenticator) Check(r *http.Request) string {
@@ -62,73 +87,93 @@ func (a *Authenticator) Check(r *http.Request) string {
 	return res.Username
 }
 
-// CheckExt возвращает username и device limit.
+// CheckExt возвращает username, device limit и причину отказа (если есть).
 func (a *Authenticator) CheckExt(r *http.Request) CheckResult {
 	hdr := r.Header.Get("Proxy-Authorization")
 	if !strings.HasPrefix(hdr, "Basic ") {
-		return CheckResult{}
+		return CheckResult{Deny: DenyBadCreds}
 	}
 	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(hdr, "Basic "))
 	if err != nil {
-		return CheckResult{}
+		return CheckResult{Deny: DenyBadCreds}
 	}
 	parts := strings.SplitN(string(decoded), ":", 2)
 	if len(parts) != 2 {
-		return CheckResult{}
+		return CheckResult{Deny: DenyBadCreds}
 	}
 	username, password := parts[0], parts[1]
 
-	stored, max, ok := a.lookup(r.Context(), username)
+	entry, ok := a.lookupEntry(r.Context(), username)
 	if !ok {
-		return CheckResult{}
+		return CheckResult{Deny: DenyBadCreds}
 	}
-	if subtle.ConstantTimeCompare([]byte(password), []byte(stored)) != 1 {
-		return CheckResult{}
+	if subtle.ConstantTimeCompare([]byte(password), []byte(entry.password)) != 1 {
+		return CheckResult{Deny: DenyBadCreds}
 	}
-	return CheckResult{Username: username, MaxDevices: max}
+	// Lifecycle checks
+	if entry.hasLifecycle {
+		if !entry.enabled {
+			return CheckResult{Username: username, Deny: DenyDisabled}
+		}
+		if entry.expiresAt > 0 && time.Now().Unix() >= entry.expiresAt {
+			return CheckResult{Username: username, Deny: DenyExpired}
+		}
+		if entry.trafficLimit > 0 && entry.trafficUsed >= entry.trafficLimit {
+			return CheckResult{Username: username, Deny: DenyTrafficLimit}
+		}
+	}
+	return CheckResult{Username: username, MaxDevices: entry.maxDevices}
 }
 
-func (a *Authenticator) lookup(ctx context.Context, username string) (string, int, bool) {
-	// Читаем из кэша
+func (a *Authenticator) lookupEntry(ctx context.Context, username string) (cacheEntry, bool) {
 	a.mu.RLock()
 	entry, hit := a.cache[username]
 	a.mu.RUnlock()
 
-	if hit && time.Now().Before(entry.expiresAt) {
+	if hit && time.Now().Before(entry.cacheExpiresAt) {
 		if entry.notFound {
-			return "", 0, false
+			return cacheEntry{}, false
 		}
-		return entry.password, entry.maxDevices, true
+		return entry, true
 	}
 
-	// Промах — идём в store
 	pw, err := a.store.GetPassword(ctx, username)
 	if err != nil {
 		slog.Warn("auth: store error", "user", username, "err", err)
 		if hit && !entry.notFound {
-			return entry.password, entry.maxDevices, true
+			return entry, true
 		}
-		return "", 0, false
+		return cacheEntry{}, false
 	}
 
-	// Опционально читаем device limit, если store его поддерживает
-	maxDevices := 0
-	if dls, ok := a.store.(DeviceLimitStore); ok && pw != "" {
-		if md, err := dls.GetMaxDevices(ctx, username); err == nil {
-			maxDevices = md
-		}
-	}
-
-	exp := time.Now().Add(a.ttl)
-	a.mu.Lock()
 	if pw == "" {
-		a.cache[username] = cacheEntry{notFound: true, expiresAt: exp}
-	} else {
-		a.cache[username] = cacheEntry{password: pw, maxDevices: maxDevices, expiresAt: exp}
+		exp := time.Now().Add(a.ttl)
+		a.mu.Lock()
+		a.cache[username] = cacheEntry{notFound: true, cacheExpiresAt: exp}
+		a.mu.Unlock()
+		return cacheEntry{}, false
 	}
-	a.mu.Unlock()
 
-	return pw, maxDevices, pw != ""
+	out := cacheEntry{password: pw}
+	if dls, ok := a.store.(DeviceLimitStore); ok {
+		if md, err := dls.GetMaxDevices(ctx, username); err == nil {
+			out.maxDevices = md
+		}
+	}
+	if lcs, ok := a.store.(LifecycleStore); ok {
+		if enabled, expAt, limit, used, err := lcs.GetLifecycle(ctx, username); err == nil {
+			out.enabled = enabled
+			out.expiresAt = expAt
+			out.trafficLimit = limit
+			out.trafficUsed = used
+			out.hasLifecycle = true
+		}
+	}
+	out.cacheExpiresAt = time.Now().Add(a.ttl)
+	a.mu.Lock()
+	a.cache[username] = out
+	a.mu.Unlock()
+	return out, true
 }
 
 // Invalidate сбрасывает кэш для конкретного пользователя.
@@ -153,7 +198,7 @@ func (a *Authenticator) evictLoop() {
 		now := time.Now()
 		a.mu.Lock()
 		for k, v := range a.cache {
-			if now.After(v.expiresAt) {
+			if now.After(v.cacheExpiresAt) {
 				delete(a.cache, k)
 			}
 		}

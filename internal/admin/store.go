@@ -15,9 +15,14 @@ type credFile struct {
 }
 
 type credEntry struct {
-	Username   string `toml:"username"`
-	Password   string `toml:"password"`
-	MaxDevices int    `toml:"max_devices,omitempty"`
+	Username    string `toml:"username"`
+	Password    string `toml:"password"`
+	MaxDevices  int    `toml:"max_devices,omitempty"`
+	// Lifecycle поля (только sqlite/postgres; file store эти поля игнорирует)
+	Enabled         bool   `toml:"-"`
+	ExpiresAt       int64  `toml:"-"`
+	TrafficLimit    uint64 `toml:"-"`
+	TrafficUsed     uint64 `toml:"-"`
 }
 
 func loadCreds(path string) ([]credEntry, error) {

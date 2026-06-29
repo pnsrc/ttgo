@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, setAuth } from "../api";
+import { Field, Icon } from "../ui";
 
 export function Login(props: { onLogin: () => void }) {
   const [endpoint, setEndpoint] = useState(
@@ -16,7 +17,7 @@ export function Login(props: { onLogin: () => void }) {
     setAuth(endpoint, token);
     try {
       const w = await api.whoami();
-      if (!w.ok) throw new Error("server rejected token");
+      if (!w.ok) throw new Error("Server rejected token");
       props.onLogin();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -25,52 +26,68 @@ export function Login(props: { onLogin: () => void }) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center">
-      <form
-        onSubmit={submit}
-        className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 w-full max-w-md space-y-4"
-      >
-        <div>
-          <h1 className="text-cyan-400 font-bold text-lg">TrustTunnel Admin</h1>
-          <p className="text-zinc-500 text-xs mt-1">Enter admin API endpoint and token</p>
+    <div className="min-h-screen flex items-center justify-center p-6 bg-bg">
+      <div className="w-full max-w-sm animate-slide-up">
+        <div className="flex items-center justify-center mb-8">
+          <div className="flex items-center gap-2.5">
+            <Icon.Logo className="w-7 h-7 text-zinc-100" />
+            <div>
+              <div className="text-lg font-semibold text-zinc-100">TrustTunnel</div>
+              <div className="text-[10px] text-zinc-600 -mt-0.5 uppercase tracking-widest">
+                Admin Console
+              </div>
+            </div>
+          </div>
         </div>
 
-        <label className="block">
-          <span className="text-xs text-zinc-400">Endpoint URL</span>
-          <input
-            value={endpoint}
-            onChange={(e) => setEndpoint(e.target.value)}
-            placeholder="http://127.0.0.1:9090 (leave empty for same origin)"
-            className="mt-1 w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-cyan-500"
-            autoFocus
-          />
-        </label>
-
-        <label className="block">
-          <span className="text-xs text-zinc-400">Bearer token</span>
-          <input
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="from [admin].token in vpn.toml"
-            className="mt-1 w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-cyan-500"
-          />
-        </label>
-
-        {error && (
-          <div className="bg-red-950 border border-red-900 text-red-300 px-3 py-2 rounded text-xs">
-            {error}
+        <form onSubmit={submit} className="card p-6 space-y-5">
+          <div>
+            <h2 className="text-base font-semibold text-zinc-100">Sign in</h2>
+            <p className="mt-1 text-xs text-zinc-500">
+              Connect to your TrustTunnel admin API
+            </p>
           </div>
-        )}
 
-        <button
-          type="submit"
-          disabled={busy || !token}
-          className="w-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/30 disabled:opacity-40 disabled:cursor-not-allowed rounded px-3 py-2 text-sm"
-        >
-          {busy ? "Connecting..." : "Sign in"}
-        </button>
-      </form>
+          <Field label="Endpoint URL" hint="Leave empty if hosted from the endpoint itself">
+            <input
+              value={endpoint}
+              onChange={(e) => setEndpoint(e.target.value)}
+              placeholder="https://example.com:9090"
+              className="input font-mono text-xs"
+              autoFocus
+            />
+          </Field>
+
+          <Field label="Bearer token">
+            <input
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="from [admin].token in vpn.toml"
+              className="input font-mono text-xs"
+            />
+          </Field>
+
+          {error && (
+            <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/30 text-red-300 px-3 py-2.5 rounded-md text-xs">
+              <Icon.Alert className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={busy || !token}
+            className="btn-primary w-full py-2.5"
+          >
+            {busy ? "Connecting…" : "Sign in"}
+          </button>
+        </form>
+
+        <p className="mt-6 text-center text-xs text-zinc-700">
+          Self-hosted · No telemetry
+        </p>
+      </div>
     </div>
   );
 }

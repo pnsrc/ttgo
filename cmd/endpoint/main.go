@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -20,6 +21,36 @@ import (
 	udpmux "github.com/pnsrc/ttgo/internal/udp"
 )
 
+// rulesEngAdapter оборачивает rules.Engine в server.RulesEngine.
+type rulesEngAdapter struct{ e *rules.Engine }
+
+func (a rulesEngAdapter) Snapshot() []server.RuleView {
+	src := a.e.Snapshot()
+	out := make([]server.RuleView, len(src))
+	for i, r := range src {
+		out[i] = server.RuleView{
+			CIDR:               r.CIDR,
+			ClientRandomPrefix: r.ClientRandomPrefix,
+			Action:             r.Action,
+		}
+	}
+	return out
+}
+
+func (a rulesEngAdapter) Set(views []server.RuleView) error {
+	in := make([]rules.RuleView, len(views))
+	for i, v := range views {
+		in[i] = rules.RuleView{
+			CIDR:               v.CIDR,
+			ClientRandomPrefix: v.ClientRandomPrefix,
+			Action:             v.Action,
+		}
+	}
+	return a.e.Set(in)
+}
+
+func (a rulesEngAdapter) Path() string { return a.e.Path() }
+
 // adminStoreAdapter оборачивает admin.UserStore в server.AdminUserStore.
 type adminStoreAdapter struct{ s admin.UserStore }
 
@@ -30,7 +61,14 @@ func (a adminStoreAdapter) List() ([]server.AdminUser, error) {
 	}
 	out := make([]server.AdminUser, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, server.AdminUser{Username: e.Username, MaxDevices: e.MaxDevices})
+		out = append(out, server.AdminUser{
+			Username:     e.Username,
+			MaxDevices:   e.MaxDevices,
+			Enabled:      e.Enabled,
+			ExpiresAt:    e.ExpiresAt,
+			TrafficLimit: e.TrafficLimit,
+			TrafficUsed:  e.TrafficUsed,
+		})
 	}
 	return out, nil
 }
@@ -38,6 +76,34 @@ func (a adminStoreAdapter) Add(u, p string) error                  { return a.s.
 func (a adminStoreAdapter) Delete(u string) error                  { return a.s.Delete(u) }
 func (a adminStoreAdapter) ChangePassword(u, p string) error       { return a.s.ChangePassword(u, p) }
 func (a adminStoreAdapter) SetMaxDevices(u string, n int) error    { return a.s.SetMaxDevices(u, n) }
+
+// Lifecycle operations (если sqlite/postgres)
+func (a adminStoreAdapter) SetEnabled(u string, en bool) error {
+	if lc, ok := a.s.(admin.LifecycleAdmin); ok {
+		return lc.SetEnabled(u, en)
+	}
+	return fmt.Errorf("not supported for %s store", a.s.StoreType())
+}
+func (a adminStoreAdapter) SetExpiresAt(u string, exp int64) error {
+	if lc, ok := a.s.(admin.LifecycleAdmin); ok {
+		return lc.SetExpiresAt(u, exp)
+	}
+	return fmt.Errorf("not supported for %s store", a.s.StoreType())
+}
+func (a adminStoreAdapter) SetTrafficLimit(u string, b uint64) error {
+	if lc, ok := a.s.(admin.LifecycleAdmin); ok {
+		return lc.SetTrafficLimit(u, b)
+	}
+	return fmt.Errorf("not supported for %s store", a.s.StoreType())
+}
+func (a adminStoreAdapter) ResetTraffic(u string) error {
+	if lc, ok := a.s.(admin.LifecycleAdmin); ok {
+		// Reset нужно сбросить также flushedBytes в ConnTracker чтобы дельты не задвоились
+		server.GlobalConnTracker.ResetUserTraffic(u)
+		return lc.ResetTraffic(u)
+	}
+	return fmt.Errorf("not supported for %s store", a.s.StoreType())
+}
 
 func main() {
 	logLevel := flag.String("l", "info", "log level: info|debug|trace")
@@ -74,6 +140,15 @@ func main() {
 		server.GlobalConnTracker.KickUser(username, "Account suspended by administrator")
 	}
 
+	// Periodic traffic flush в persistent store (sqlite/postgres).
+	// Каждые 30 секунд — дельта по каждому юзеру вливается в БД, переживает рестарты.
+	if fl, ok := userStore.(server.TrafficFlusher); ok {
+		server.GlobalConnTracker.StartTrafficFlusher(
+			context.Background(), fl, 30*time.Second,
+		)
+		slog.Info("traffic flusher started", "interval", "30s")
+	}
+
 	// Admin API (опционально, только если настроен в конфиге).
 	var adminStore server.AdminUserStore
 	if cfg.Admin != nil && cfg.Admin.Token != "" {
@@ -92,13 +167,42 @@ func main() {
 	if cfg.Admin != nil {
 		webRoot = cfg.Admin.WebRoot
 	}
-	server.StartAdminAPI(cfg.Admin, authn, adminStore, webRoot)
+
+	// Полный snapshot конфига для /api/info
+	fullCfg := buildFullConfig(cfg, hostsPath)
+
+	// TLS hot reload — отправляем SIGHUP самим себе (server.go обрабатывает)
+	tlsReload := func() error {
+		p, err := os.FindProcess(os.Getpid())
+		if err != nil {
+			return err
+		}
+		return p.Signal(syscall.SIGHUP)
+	}
+
+	// patchConfigFn — мост: server-пакет вызывает наш writer из admin-пакета
+	server.SetPatchConfigFn(func(path string, raw []byte) error {
+		var ed admin.EditableConfig
+		if err := admin.UnmarshalEditableConfig(raw, &ed); err != nil {
+			return err
+		}
+		return admin.PatchVPNConfig(path, ed)
+	})
+
+	// Graceful restart через systemd: завершаем процесс, юнит с Restart=always
+	// поднимет нас заново.
+	restart := func() {
+		slog.Info("admin: restart requested, exiting")
+		os.Exit(0)
+	}
 
 	rulesEng := rules.New()
 	if err := rulesEng.LoadFile(cfg.RulesFile); err != nil {
 		slog.Error("load rules", "err", err)
 		os.Exit(1)
 	}
+
+	server.StartAdminAPI(cfg.Admin, authn, adminStore, webRoot, fullCfg, tlsReload, rulesEngAdapter{rulesEng}, vpnPath, restart)
 
 	udpMux := udpmux.NewMux(cfg.UDPConnectionsTimeoutSecs)
 
@@ -133,6 +237,35 @@ func main() {
 		slog.Error("server", "err", err)
 		os.Exit(1)
 	}
+}
+
+// buildFullConfig — snapshot конфига для /api/info.
+func buildFullConfig(cfg *config.Config, hostsPath string) *server.FullConfig {
+	out := &server.FullConfig{
+		ListenAddress:    cfg.ListenAddress,
+		StoreType:        cfg.StoreType,
+		StoreDSN:         cfg.StoreDSN,
+		CacheTTLSecs:     cfg.CacheTTLSecs,
+		AllowPrivateNet:  cfg.AllowPrivateNet,
+		IPv6Available:    cfg.IPv6Available,
+		TCPIdleTimeout:   cfg.TCPConnectionsTimeoutSecs,
+		UDPIdleTimeout:   cfg.UDPConnectionsTimeoutSecs,
+		ConnectTimeout:   cfg.ConnectionEstablishTimeoutSecs,
+		TLSHandshake:     cfg.TLSHandshakeTimeoutSecs,
+		HTTP3Enabled:     cfg.ListenProtocols.QUIC != nil,
+		ICMPEnabled:      cfg.ICMP != nil,
+	}
+	if hosts, err := config.LoadHosts(hostsPath); err == nil {
+		for _, h := range hosts.MainHosts {
+			info := server.HostInfo{Hostname: h.Hostname}
+			if cert, err := server.ReadCertInfo(h.CertChainPath); err == nil {
+				info.NotAfter = cert.NotAfter
+				info.Issuer = cert.Issuer
+			}
+			out.Hostnames = append(out.Hostnames, info)
+		}
+	}
+	return out
 }
 
 func buildStore(cfg *config.Config) (auth.UserStore, error) {

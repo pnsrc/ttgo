@@ -112,8 +112,8 @@ After=network.target
 [Service]
 ExecStart=$PREFIX/trusttunnel_endpoint $PREFIX/vpn.toml $PREFIX/hosts.toml
 WorkingDirectory=$PREFIX
-Restart=on-failure
-RestartSec=5
+Restart=always
+RestartSec=1
 LimitNOFILE=1048576
 
 [Install]

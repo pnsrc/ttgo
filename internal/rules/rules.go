@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 
@@ -31,14 +32,86 @@ type Rule struct {
 type Engine struct {
 	mu    sync.RWMutex
 	rules []*Rule
+	path  string // запоминаем для Save()
 }
 
 func New() *Engine {
 	return &Engine{}
 }
 
+// Path возвращает путь к rules.toml (для отображения в UI).
+func (e *Engine) Path() string {
+	return e.path
+}
+
+// Snapshot возвращает копию rules с экспортируемыми полями для admin API.
+type RuleView struct {
+	CIDR               string `json:"cidr"`
+	ClientRandomPrefix string `json:"client_random_prefix"`
+	Action             string `json:"action"`
+}
+
+func (e *Engine) Snapshot() []RuleView {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]RuleView, 0, len(e.rules))
+	for _, r := range e.rules {
+		out = append(out, RuleView{
+			CIDR:               r.CIDR,
+			ClientRandomPrefix: r.ClientRandomPrefix,
+			Action:             string(r.Action),
+		})
+	}
+	return out
+}
+
+// Set заменяет полный набор правил, компилирует и сохраняет в файл если path задан.
+func (e *Engine) Set(views []RuleView) error {
+	compiled := make([]*Rule, 0, len(views))
+	for i, v := range views {
+		r := &Rule{
+			CIDR:               v.CIDR,
+			ClientRandomPrefix: v.ClientRandomPrefix,
+			Action:             Action(v.Action),
+		}
+		if err := compile(r); err != nil {
+			return fmt.Errorf("rule %d: %w", i, err)
+		}
+		compiled = append(compiled, r)
+	}
+	e.mu.Lock()
+	e.rules = compiled
+	e.mu.Unlock()
+	if e.path == "" {
+		return nil
+	}
+	return saveRulesFile(e.path, views)
+}
+
+func saveRulesFile(path string, views []RuleView) error {
+	var sb strings.Builder
+	for _, v := range views {
+		sb.WriteString("[[rule]]\n")
+		if v.CIDR != "" {
+			sb.WriteString(fmt.Sprintf("cidr = %q\n", v.CIDR))
+		}
+		if v.ClientRandomPrefix != "" {
+			sb.WriteString(fmt.Sprintf("client_random_prefix = %q\n", v.ClientRandomPrefix))
+		}
+		sb.WriteString(fmt.Sprintf("action = %q\n\n", v.Action))
+	}
+	return os.WriteFile(path, []byte(sb.String()), 0644)
+}
+
 func (e *Engine) LoadFile(path string) error {
+	e.mu.Lock()
+	e.path = path
+	e.mu.Unlock()
 	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// rules.toml не обязателен
 		return nil
 	}
 	type rulesFile struct {
