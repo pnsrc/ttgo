@@ -1,0 +1,215 @@
+export namespace client {
+	
+	export class Config {
+	    Endpoint: string;
+	    Hostname: string;
+	    Username: string;
+	    Password: string;
+	    Insecure: boolean;
+	    PinnedCertPEM: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Config(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Endpoint = source["Endpoint"];
+	        this.Hostname = source["Hostname"];
+	        this.Username = source["Username"];
+	        this.Password = source["Password"];
+	        this.Insecure = source["Insecure"];
+	        this.PinnedCertPEM = source["PinnedCertPEM"];
+	    }
+	}
+	export class EndpointTOML {
+	    Hostname: string;
+	    Addresses: string[];
+	    Username: string;
+	    Password: string;
+	    ClientRandom: string;
+	    CustomSNI: string;
+	    HasIPv6: boolean;
+	    SkipVerification: boolean;
+	    UpstreamProtocol: string;
+	    UpstreamFallbackProtocol: string;
+	    AntiDPI: boolean;
+	    Certificate: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EndpointTOML(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Hostname = source["Hostname"];
+	        this.Addresses = source["Addresses"];
+	        this.Username = source["Username"];
+	        this.Password = source["Password"];
+	        this.ClientRandom = source["ClientRandom"];
+	        this.CustomSNI = source["CustomSNI"];
+	        this.HasIPv6 = source["HasIPv6"];
+	        this.SkipVerification = source["SkipVerification"];
+	        this.UpstreamProtocol = source["UpstreamProtocol"];
+	        this.UpstreamFallbackProtocol = source["UpstreamFallbackProtocol"];
+	        this.AntiDPI = source["AntiDPI"];
+	        this.Certificate = source["Certificate"];
+	    }
+	}
+	export class SocksTOML {
+	    Address: string;
+	    Username: string;
+	    Password: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SocksTOML(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Address = source["Address"];
+	        this.Username = source["Username"];
+	        this.Password = source["Password"];
+	    }
+	}
+	export class TunTOML {
+	    BoundIf: string;
+	    MTU: number;
+	    ChangeSystemDNS: boolean;
+	    IncludedRoutes: string[];
+	    ExcludedRoutes: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new TunTOML(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.BoundIf = source["BoundIf"];
+	        this.MTU = source["MTU"];
+	        this.ChangeSystemDNS = source["ChangeSystemDNS"];
+	        this.IncludedRoutes = source["IncludedRoutes"];
+	        this.ExcludedRoutes = source["ExcludedRoutes"];
+	    }
+	}
+	export class ListenerTOML {
+	    TUN?: TunTOML;
+	    SOCKS?: SocksTOML;
+	
+	    static createFrom(source: any = {}) {
+	        return new ListenerTOML(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.TUN = this.convertValues(source["TUN"], TunTOML);
+	        this.SOCKS = this.convertValues(source["SOCKS"], SocksTOML);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ProfileTOML {
+	    LogLevel: string;
+	    VPNMode: string;
+	    KillswitchEnabled: boolean;
+	    PostQuantumEnabled: boolean;
+	    Exclusions: string[];
+	    DNSUpstreams: string[];
+	    Endpoint: EndpointTOML;
+	    Listener: ListenerTOML;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProfileTOML(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.LogLevel = source["LogLevel"];
+	        this.VPNMode = source["VPNMode"];
+	        this.KillswitchEnabled = source["KillswitchEnabled"];
+	        this.PostQuantumEnabled = source["PostQuantumEnabled"];
+	        this.Exclusions = source["Exclusions"];
+	        this.DNSUpstreams = source["DNSUpstreams"];
+	        this.Endpoint = this.convertValues(source["Endpoint"], EndpointTOML);
+	        this.Listener = this.convertValues(source["Listener"], ListenerTOML);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Profile {
+	    id: string;
+	    path: string;
+	    name: string;
+	    endpoint: string;
+	    username: string;
+	    toml: ProfileTOML;
+	
+	    static createFrom(source: any = {}) {
+	        return new Profile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.path = source["path"];
+	        this.name = source["name"];
+	        this.endpoint = source["endpoint"];
+	        this.username = source["username"];
+	        this.toml = this.convertValues(source["toml"], ProfileTOML);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+
+}
+

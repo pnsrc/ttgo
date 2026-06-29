@@ -1,4 +1,9 @@
 trusttunnel_endpoint.linux
 ttadmin.linux
 *.linux
-ttclient
+/ttclient
+.DS_Store
+cmd/ttclient/build/
+cmd/ttclient/frontend/dist/
+cmd/ttclient/frontend/node_modules/
+cmd/ttclient/frontend/tsconfig.tsbuildinfo

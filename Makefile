@@ -14,10 +14,16 @@ build-admin:
 	go build -ldflags="-s -w" -o $(ADMIN) $(ADMCMD)
 
 build-client:
-	go build -ldflags="-s -w" -o $(CLIENT) $(CLIENTCMD)
+	cd cmd/ttclient && wails build
+
+build-client-dev:
+	cd cmd/ttclient && wails build -devtools
+
+client-dev:
+	cd cmd/ttclient && wails dev
 
 client: build-client
-	sudo ./$(CLIENT)
+	sudo ./cmd/ttclient/build/bin/ttclient.app/Contents/MacOS/ttclient
 
 build-all: build build-admin build-client
 

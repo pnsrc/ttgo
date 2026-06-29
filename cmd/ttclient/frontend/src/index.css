@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: #0a0a0a;
+  color: #fafafa;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  --wails-draggable: drag;
+}
+
+input { user-select: text; -webkit-user-select: text; }
+
+* { -webkit-tap-highlight-color: transparent; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
+
+@layer components {
+  .input {
+    @apply w-full bg-bg-elevated border border-border rounded-md px-3 py-2 text-sm text-zinc-100
+           placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors;
+  }
+  .label { @apply block text-xs font-medium text-zinc-400 mb-1.5; }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium
+           transition-all duration-100 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-primary { @apply btn bg-zinc-100 text-zinc-900 hover:bg-white active:scale-[0.98]; }
+  .btn-ghost { @apply btn text-zinc-400 hover:text-zinc-100 hover:bg-bg-elevated; }
+}
+
+/* Drag handle для Wails — кастомный titlebar */
+.titlebar { --wails-draggable: drag; }
+.titlebar button { --wails-draggable: no-drag; }
