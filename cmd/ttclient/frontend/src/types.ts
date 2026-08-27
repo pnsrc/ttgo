@@ -33,3 +33,15 @@ export type Config = {
   password: string;
   insecure?: boolean;
 };
+
+export type GlobalSettings = {
+  last_profile_id: string;
+  bypass_domains: boolean;
+  global_exclusions: string[] | null;
+  language: string;
+  auto_connect: boolean;
+  enable_adblock: boolean;
+  theme: string;
+  upstream_dns: string;
+  routing_mode: string;
+};

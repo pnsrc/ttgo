@@ -2,19 +2,68 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: dark; }
+@layer base {
+  :root, [data-theme="glass"] {
+    --bg-main: transparent;
+    --bg-elevated: rgba(30, 30, 30, 0.4);
+    --bg-subtle: rgba(20, 20, 20, 0.3);
+    --border-subtle: rgba(255, 255, 255, 0.1);
+    
+    --text-primary: #f4f4f5; /* zinc-100 */
+    --text-secondary: #d4d4d8; /* zinc-300 */
+    --text-muted: #a1a1aa; /* zinc-400 */
+    --text-faint: #71717a; /* zinc-500 */
+    color-scheme: dark;
+  }
+  
+  [data-theme="dark"] {
+    --bg-main: #0a0a0a;
+    --bg-elevated: #18181b;
+    --bg-subtle: #141414;
+    --border-subtle: rgba(255, 255, 255, 0.1);
+    
+    --text-primary: #f4f4f5;
+    --text-secondary: #d4d4d8;
+    --text-muted: #a1a1aa;
+    --text-faint: #71717a;
+    color-scheme: dark;
+  }
+  
+  [data-theme="light"] {
+    --bg-main: #f4f4f5; /* zinc-100 */
+    --bg-elevated: #ffffff;
+    --bg-subtle: #e4e4e7; /* zinc-200 */
+    --border-subtle: rgba(0, 0, 0, 0.1);
+    
+    --text-primary: #18181b; /* zinc-900 */
+    --text-secondary: #3f3f46; /* zinc-700 */
+    --text-muted: #71717a; /* zinc-500 */
+    --text-faint: #a1a1aa; /* zinc-400 */
+    color-scheme: light;
+  }
+  
+  [data-theme="epic"] {
+    --bg-main: #0088ff; /* Vibrant blue from Ferma screenshot */
+    --bg-elevated: #0075eb;
+    --bg-subtle: #006ae6;
+    --border-subtle: rgba(255, 255, 255, 0.25);
+    
+    --text-primary: #ffffff;
+    --text-secondary: rgba(255, 255, 255, 0.9);
+    --text-muted: rgba(255, 255, 255, 0.7);
+    --text-faint: rgba(255, 255, 255, 0.5);
+    color-scheme: dark;
+  }
+  
+  body {
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+    @apply overflow-hidden font-sans select-none antialiased;
+    --wails-draggable: drag;
+  }
+}
 
 html, body, #root { height: 100%; }
-
-body {
-  margin: 0;
-  background: #0a0a0a;
-  color: #fafafa;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  user-select: none;
-  --wails-draggable: drag;
-}
 
 input { user-select: text; -webkit-user-select: text; }
 
@@ -26,18 +75,39 @@ input { user-select: text; -webkit-user-select: text; }
 
 @layer components {
   .input {
-    @apply w-full bg-bg-elevated border border-border rounded-md px-3 py-2 text-sm text-zinc-100
-           placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors;
+    @apply w-full bg-bg-elevated border border-border rounded-md px-3 py-2 text-sm
+           focus:outline-none focus:border-zinc-500 transition-colors;
+    color: var(--text-primary);
   }
-  .label { @apply block text-xs font-medium text-zinc-400 mb-1.5; }
+  .input::placeholder {
+    color: var(--text-faint);
+  }
+  .label { 
+    @apply block text-xs font-medium mb-1.5; 
+    color: var(--text-muted);
+  }
   .btn {
     @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium
            transition-all duration-100 disabled:opacity-40 disabled:cursor-not-allowed;
   }
-  .btn-primary { @apply btn bg-zinc-100 text-zinc-900 hover:bg-white active:scale-[0.98]; }
-  .btn-ghost { @apply btn text-zinc-400 hover:text-zinc-100 hover:bg-bg-elevated; }
+  .btn-primary { 
+    @apply btn bg-zinc-100 hover:bg-white active:scale-[0.98]; 
+    color: #18181b;
+  }
+  .btn-ghost { 
+    @apply btn hover:bg-bg-elevated; 
+    color: var(--text-muted);
+  }
+  .btn-ghost:hover {
+    color: var(--text-primary);
+  }
 }
 
 /* Drag handle для Wails — кастомный titlebar */
-.titlebar { --wails-draggable: drag; }
+.titlebar { --wails-draggable: drag; padding-left: 12px; }
 .titlebar button { --wails-draggable: no-drag; }
+
+/* На macOS резервируем место под системные кнопки окна (traffic lights). */
+.platform-macos .titlebar {
+  padding-left: max(84px, calc(env(titlebar-area-width, 72px) + 12px));
+}

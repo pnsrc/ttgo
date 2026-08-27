@@ -94,13 +94,21 @@ func (c *Client) Connect(cfg Config) error {
 	}
 
 	// Маршруты — split-default + endpoint bypass.
-	routes, err := NewRouteManager(tunDev.Name(), cfg.Endpoint)
+	routes, err := NewRouteManager(tunDev.Name(), cfg.Endpoint, cfg.Exclusions)
 	if err != nil {
 		tunDev.Close()
 		dialer.Close()
 		c.setState(StateError, "routes: "+err.Error())
 		return err
 	}
+	if cfg.EnableAdBlock {
+		tunDev.SetAdBlocker(NewAdBlocker())
+	}
+	if cfg.UpstreamDNS != "" {
+		tunDev.SetUpstreamDNS(cfg.UpstreamDNS)
+	}
+	tunDev.SetDNSBypass(cfg.Exclusions, routes.AddDynamicHostBypassBatch)
+
 	if err := routes.Install(); err != nil {
 		tunDev.Close()
 		dialer.Close()

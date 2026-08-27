@@ -97,6 +97,7 @@ func (p *Profile) ToConfig() Config {
 		Password:      p.Toml.Endpoint.Password,
 		Insecure:      p.Toml.Endpoint.SkipVerification,
 		PinnedCertPEM: []byte(p.Toml.Endpoint.Certificate),
+		Exclusions:    p.Toml.Exclusions,
 	}
 }
 
@@ -200,6 +201,33 @@ func (s *ProfileStore) Delete(id string) error {
 		}
 	}
 	return fmt.Errorf("profile %s not found", id)
+}
+
+// ReadContent returns the raw TOML content of the profile.
+func (s *ProfileStore) ReadContent(id string) (string, error) {
+	p, err := s.Get(id)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(p.Path)
+	return string(data), err
+}
+
+// WriteContent validates and saves the raw TOML content of the profile.
+func (s *ProfileStore) WriteContent(id string, content string) error {
+	p, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	// Validate before saving
+	var doc ProfileTOML
+	if err := toml.Unmarshal([]byte(content), &doc); err != nil {
+		return fmt.Errorf("invalid TOML: %w", err)
+	}
+	if doc.Endpoint.Username == "" || len(doc.Endpoint.Addresses) == 0 {
+		return fmt.Errorf("profile must have endpoint.username and endpoint.addresses")
+	}
+	return os.WriteFile(p.Path, []byte(content), 0600)
 }
 
 // Get returns a profile by ID.

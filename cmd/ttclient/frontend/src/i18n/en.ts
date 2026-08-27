@@ -1,0 +1,55 @@
+export const en = {
+  servers: "Servers",
+  no_profiles: "No profiles yet",
+  import_hint: "Import a TrustTunnel .toml config to get started",
+  import_profile: "Import profile",
+  import_another: "Import another profile",
+  delete_confirm: "Delete this profile?",
+  
+  settings: "Network Settings",
+  enable_bypass: "Enable domain bypass rules",
+  bypass_hint: "Domains and IPs listed here will be added to the exclusions of the connected profile. Supported formats: domain.com, *.domain.com, IP, IP:port, CIDR (IP/mask).",
+  auto_connect: "Connect automatically on launch",
+  language: "Language",
+  save: "Save",
+  saving: "Saving...",
+  cancel: "Cancel",
+  settings_saved: "Settings saved",
+  
+  adblock: "AdBlock & Trackers",
+  adblock_desc: "Block ads at the DNS level (uses NoADS_RU list)",
+  
+  protected: "Protected",
+  connecting: "Connecting…",
+  error: "Error",
+  tap_to_connect: "Tap to connect",
+  
+  uptime: "Uptime",
+  tunnels: "Tunnels",
+  download: "↓ Download",
+  upload: "↑ Upload",
+  interface: "Interface",
+  total: "total",
+  
+  profile: "Profile",
+  address: "Address",
+  hostname: "Hostname",
+  protocol: "Protocol",
+  tls_verify: "TLS verify",
+  skipped: "skipped",
+  exclusions: "Exclusions",
+  rules: "rules",
+  
+  edit_config: "Edit config",
+  delete: "Delete",
+  share: "Share",
+  qr_hint: "Scan to import profile",
+  analytics: "Analytics",
+  analytics_hint: "Session traffic usage over time",
+  
+  pinging: "Pinging servers...",
+  ping_finished: "Ping finished",
+  loading: "Loading...",
+  
+  select_sidebar: "Select a profile from the sidebar to view details",
+};

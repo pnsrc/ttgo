@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -33,6 +34,14 @@ type Config struct {
 
 	// Optional pinned PEM cert (overrides system roots if set)
 	PinnedCertPEM []byte
+
+	// Exclusions list for domain/IP bypass
+	Exclusions []string
+
+	// Settings
+	EnableAdBlock bool
+	UpstreamDNS   string
+	RoutingMode   string // e.g. "global", "ru-blocked"
 }
 
 // Stats — counters exposed to UI.
@@ -54,7 +63,7 @@ type Dialer struct {
 	stats     *Stats
 	authBasic string
 
-	mu    sync.Mutex
+	mu sync.Mutex
 	// reused TLS connection to endpoint — http2.Transport уже делает pooling
 	// сам, но мы храним ссылку чтобы при Close прерывать всё.
 	hostnameForSNI string
@@ -119,34 +128,39 @@ func NewDialer(cfg Config, stats *Stats) (*Dialer, error) {
 // a bidirectional net.Conn for the byte stream. Не блокирует после возврата —
 // конец туннеля живёт до Close или закрытия серверной стороны.
 func (d *Dialer) DialContext(ctx context.Context, target string) (net.Conn, error) {
+	startedAt := time.Now()
 	pr, pw := io.Pipe() // body клиент → сервер (запись в pw → чтение сервером)
+	slog.Debug("connect start", "target", target, "endpoint", d.endpoint.Host)
+
+	// КРИТИЧНО: URL должен указывать на endpoint (это куда HTTP/2 transport
+	// делает TCP/TLS). Только Host header содержит CONNECT-target.
 	req, err := http.NewRequestWithContext(ctx, http.MethodConnect, d.endpoint.String(), pr)
 	if err != nil {
 		pw.Close()
 		return nil, err
 	}
-	// authority-form для CONNECT
 	req.Host = target
-	req.URL.Host = target
-	req.URL.Path = ""
 	req.Header.Set("Proxy-Authorization", d.authBasic)
 	req.Header.Set("User-Agent", "ttgo-client/0.1")
 
 	resp, err := d.httpc.Do(req)
 	if err != nil {
 		pw.Close()
+		slog.Debug("connect failed", "target", target, "err", err, "duration", time.Since(startedAt).String())
 		return nil, fmt.Errorf("connect %s: %w", target, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 		resp.Body.Close()
 		pw.Close()
+		slog.Debug("connect rejected", "target", target, "status", resp.Status, "body", strings.TrimSpace(string(body)))
 		return nil, fmt.Errorf("connect %s: %s: %s",
 			target, resp.Status, strings.TrimSpace(string(body)))
 	}
 
 	d.stats.Tunnels.Add(1)
 	d.stats.ActiveConn.Add(1)
+	slog.Debug("connect established", "target", target, "active_tunnels", d.stats.ActiveConn.Load(), "duration", time.Since(startedAt).String())
 
 	return newTunnelConn(target, resp.Body, pw, d.stats), nil
 }
@@ -219,6 +233,11 @@ func (c *tunnelConn) Close() error {
 		c.stats.ActiveConn.Add(-1)
 	})
 	return nil
+}
+
+// CloseWrite завершает клиент->сервер направление CONNECT-потока (FIN).
+func (c *tunnelConn) CloseWrite() error {
+	return c.writer.Close()
 }
 
 func (c *tunnelConn) LocalAddr() net.Addr  { return c.local }

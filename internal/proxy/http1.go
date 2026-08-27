@@ -70,7 +70,14 @@ func serveHTTP1Tunnel(w http.ResponseWriter, r *http.Request, target, username s
 		}
 	}()
 
-	<-errCh
+	// Ждём завершение обоих направлений, иначе режем downlink.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-errCh:
+		}
+	}
 	slog.Debug("h1 tunnel closed", "target", target, "user", username)
 }
 

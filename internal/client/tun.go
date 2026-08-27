@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
 	"golang.zx2c4.com/wireguard/tun"
 
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -39,14 +41,19 @@ const (
 // TunDevice — поднятый TUN-интерфейс + gvisor netstack, который раскидывает
 // TCP flow в HTTP/2 CONNECT через Dialer.
 type TunDevice struct {
-	dev         tun.Device
-	name        string
-	stack       *stack.Stack
-	link        *channel.Endpoint
-	dialer      *Dialer
-	stats       *Stats
-	ctx         context.Context
-	cancel      context.CancelFunc
+	dev    tun.Device
+	name   string
+	stack  *stack.Stack
+	link   *channel.Endpoint
+	dialer *Dialer
+	stats  *Stats
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	dnsExclusions []string
+	onDNSBypass   func(ips []net.IP)
+	adBlocker     *AdBlocker
+	upstreamDNS   string
 
 	wg sync.WaitGroup
 }
@@ -55,8 +62,7 @@ type TunDevice struct {
 // и регистрирует TCP forwarder который для каждого нового flow вызовет
 // dialer.DialContext.
 func OpenTUN(ctx context.Context, dialer *Dialer, stats *Stats) (*TunDevice, error) {
-	// "utun" на macOS = система сама выбирает номер (utun5, utun6, ...)
-	dev, err := tun.CreateTUN("utun", defaultMTU)
+	dev, err := tun.CreateTUN(tunDeviceName, defaultMTU)
 	if err != nil {
 		return nil, fmt.Errorf("create tun: %w", err)
 	}
@@ -143,13 +149,11 @@ func (t *TunDevice) Close() error {
 	return err
 }
 
-// pumpTUNToStack читает пакеты из TUN и инжектит их в netstack.
 func (t *TunDevice) pumpTUNToStack() {
 	defer t.wg.Done()
-	// wireguard/tun.Device.Read принимает batch буферов.
 	bufs := make([][]byte, 1)
 	sizes := make([]int, 1)
-	bufs[0] = make([]byte, defaultMTU+16) // +16 для возможных tun-overhead байтов на macOS
+	bufs[0] = make([]byte, defaultMTU+tunHeaderLen+4)
 
 	for {
 		select {
@@ -157,7 +161,7 @@ func (t *TunDevice) pumpTUNToStack() {
 			return
 		default:
 		}
-		n, err := t.dev.Read(bufs, sizes, 4) // 4 = offset (macOS utun header)
+		n, err := t.dev.Read(bufs, sizes, tunHeaderLen)
 		if err != nil {
 			if t.ctx.Err() != nil {
 				return
@@ -168,9 +172,8 @@ func (t *TunDevice) pumpTUNToStack() {
 		if n == 0 {
 			continue
 		}
-		pktData := bufs[0][4 : 4+sizes[0]] // снимаем utun префикс
+		pktData := bufs[0][tunHeaderLen : tunHeaderLen+sizes[0]]
 
-		// Определяем version (IPv4 vs IPv6) по первым 4 битам.
 		var proto tcpip.NetworkProtocolNumber
 		switch pktData[0] >> 4 {
 		case 4:
@@ -189,7 +192,6 @@ func (t *TunDevice) pumpTUNToStack() {
 	}
 }
 
-// pumpStackToTUN читает пакеты из netstack и пишет в TUN.
 func (t *TunDevice) pumpStackToTUN() {
 	defer t.wg.Done()
 	for {
@@ -197,20 +199,13 @@ func (t *TunDevice) pumpStackToTUN() {
 		if pkt == nil {
 			return
 		}
-		// Собираем slices из packet buffer'a в один []byte с префиксом utun (4 байта).
-		buf := make([]byte, 4, 4+pkt.Size())
-		// utun header: AF_INET (2) или AF_INET6 (30) в network byte order.
-		switch pkt.NetworkProtocolNumber {
-		case ipv4.ProtocolNumber:
-			buf[3] = 2 // syscall.AF_INET
-		case ipv6.ProtocolNumber:
-			buf[3] = 30 // syscall.AF_INET6
-		}
+		var raw []byte
 		for _, v := range pkt.AsSlices() {
-			buf = append(buf, v...)
+			raw = append(raw, v...)
 		}
+		buf := tunWritePacket(raw, pkt.NetworkProtocolNumber)
 		pkt.DecRef()
-		if _, err := t.dev.Write([][]byte{buf}, 4); err != nil {
+		if _, err := t.dev.Write([][]byte{buf}, tunHeaderLen); err != nil {
 			if t.ctx.Err() != nil {
 				return
 			}
@@ -223,6 +218,7 @@ func (t *TunDevice) pumpStackToTUN() {
 func (t *TunDevice) handleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
 	target := net.JoinHostPort(id.LocalAddress.String(), fmt.Sprintf("%d", id.LocalPort))
+	slog.Debug("tcp flow accepted", "target", target)
 
 	var wq waiter.Queue
 	ep, tcpErr := r.CreateEndpoint(&wq)
@@ -240,29 +236,165 @@ func (t *TunDevice) handleTCP(r *tcp.ForwarderRequest) {
 // relayTCP: открываем CONNECT-туннель и проксируем bidirectional.
 func (t *TunDevice) relayTCP(localConn net.Conn, target string) {
 	defer localConn.Close()
+	startedAt := time.Now()
 
-	ctx, cancel := context.WithTimeout(t.ctx, 15*time.Second)
-	remote, err := t.dialer.DialContext(ctx, target)
-	cancel()
+	// Нельзя использовать короткий ctx для CONNECT-стрима: его отмена рвёт downlink.
+	remote, err := t.dialer.DialContext(t.ctx, target)
 	if err != nil {
 		slog.Debug("dial endpoint failed", "target", target, "err", err)
 		return
 	}
 	defer remote.Close()
+	slog.Debug("tunnel open", "target", target)
 
-	done := make(chan struct{}, 2)
-	go func() { io.Copy(remote, localConn); done <- struct{}{} }()
-	go func() { io.Copy(localConn, remote); done <- struct{}{} }()
-	<-done
+	copyDone := make(chan copyResult, 2)
+	go func() {
+		n, err := io.Copy(remote, localConn)
+		closeWrite(remote)
+		copyDone <- copyResult{dir: "uplink", bytes: n, err: err}
+	}()
+	go func() {
+		n, err := io.Copy(localConn, remote)
+		closeWrite(localConn)
+		copyDone <- copyResult{dir: "downlink", bytes: n, err: err}
+	}()
+
+	// Ждём завершение обоих направлений, иначе можно обрубить download.
+	r1 := <-copyDone
+	r2 := <-copyDone
+	slog.Debug("tunnel closed",
+		"target", target,
+		"duration", time.Since(startedAt).String(),
+		"uplink_bytes", pickBytes("uplink", r1, r2),
+		"downlink_bytes", pickBytes("downlink", r1, r2),
+		"uplink_err", pickErr("uplink", r1, r2),
+		"downlink_err", pickErr("downlink", r1, r2),
+	)
 }
 
-// handleUDP — заглушка: пока что роняем UDP (включая DNS).
-// Полноценная имплементация требует _udp2 псевдо-хост туннелирование.
-// Возвращаем false (не обработано) — netstack отвечает ICMP unreachable.
+type writeCloser interface {
+	CloseWrite() error
+}
+
+func closeWrite(c net.Conn) {
+	if cw, ok := c.(writeCloser); ok {
+		_ = cw.CloseWrite()
+	}
+}
+
 func (t *TunDevice) handleUDP(r *udp.ForwarderRequest) bool {
 	id := r.ID()
-	slog.Debug("udp dropped", "dst", net.JoinHostPort(id.LocalAddress.String(), fmt.Sprintf("%d", id.LocalPort)))
-	return false
+	if id.LocalPort != 53 {
+		slog.Debug("udp dropped", "dst", net.JoinHostPort(id.LocalAddress.String(), fmt.Sprintf("%d", id.LocalPort)))
+		return false
+	}
+
+	var wq waiter.Queue
+	ep, udpErr := r.CreateEndpoint(&wq)
+	if udpErr != nil {
+		return true
+	}
+
+	localUDP := gonet.NewUDPConn(&wq, ep)
+	go t.relayDNSUDP(localUDP)
+	return true
+}
+
+func (t *TunDevice) relayDNSUDP(localUDP net.Conn) {
+	defer localUDP.Close()
+
+	upstream := t.upstreamDNS
+	if upstream == "" {
+		upstream = "1.1.1.1"
+	}
+
+	buf := make([]byte, 4096)
+	for {
+		localUDP.SetReadDeadline(time.Now().Add(90 * time.Second))
+		n, err := localUDP.Read(buf)
+		if err != nil {
+			return
+		}
+		if n == 0 {
+			continue
+		}
+		t.stats.BytesOut.Add(uint64(n))
+
+		if t.adBlocker != nil {
+			res, domain, parseErr := createFakeDNSResponse(buf[:n])
+			if parseErr == nil && t.adBlocker.IsBlocked(domain) {
+				slog.Debug("adblock intercepted", "domain", domain)
+				localUDP.Write(res)
+				continue
+			}
+		}
+
+		resp, fwdErr := t.forwardDNSQuery(buf[:n], upstream)
+		if fwdErr != nil {
+			slog.Debug("dns forward failed", "upstream", upstream, "err", fwdErr)
+			continue
+		}
+		t.stats.BytesIn.Add(uint64(len(resp)))
+
+		if t.onDNSBypass != nil {
+			if ips := parseDNSResponse(resp, t.dnsExclusions); len(ips) > 0 {
+				t.onDNSBypass(ips)
+			}
+		}
+
+		localUDP.Write(resp)
+	}
+}
+
+func (t *TunDevice) forwardDNSQuery(query []byte, upstream string) ([]byte, error) {
+	conn, err := net.DialTimeout("udp", upstream+":53", 3*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if _, err := conn.Write(query); err != nil {
+		return nil, err
+	}
+	resp := make([]byte, 4096)
+	n, err := conn.Read(resp)
+	if err != nil {
+		return nil, err
+	}
+	return resp[:n], nil
+}
+
+type copyResult struct {
+	dir   string
+	bytes int64
+	err   error
+}
+
+func pickBytes(dir string, a, b copyResult) int64 {
+	if a.dir == dir {
+		return a.bytes
+	}
+	if b.dir == dir {
+		return b.bytes
+	}
+	return 0
+}
+
+func pickErr(dir string, a, b copyResult) string {
+	var err error
+	if a.dir == dir {
+		err = a.err
+	} else if b.dir == dir {
+		err = b.err
+	}
+	if err == nil {
+		return ""
+	}
+	if err == io.EOF {
+		return "EOF"
+	}
+	return err.Error()
 }
 
 // assignAddress — присвоить IP виртуальному интерфейсу netstack.
@@ -286,4 +418,128 @@ func assignAddress(s *stack.Stack, nic tcpip.NICID, proto tcpip.NetworkProtocolN
 		return fmt.Errorf("add address %s: %s", ip, tcpErr)
 	}
 	return nil
+}
+
+func createFakeDNSResponse(buf []byte) ([]byte, string, error) {
+	var p dnsmessage.Parser
+	header, err := p.Start(buf)
+	if err != nil {
+		return nil, "", err
+	}
+	q, err := p.Question()
+	if err != nil {
+		return nil, "", err
+	}
+	
+	domain := strings.TrimSuffix(q.Name.String(), ".")
+	
+	header.Response = true
+	header.Authoritative = true
+	
+	b := dnsmessage.NewBuilder(nil, header)
+	b.StartQuestions()
+	b.Question(q)
+	b.StartAnswers()
+	if q.Type == dnsmessage.TypeA {
+		b.AResource(
+			dnsmessage.ResourceHeader{
+				Name:  q.Name,
+				Type:  dnsmessage.TypeA,
+				Class: dnsmessage.ClassINET,
+				TTL:   60,
+			},
+			dnsmessage.AResource{A: [4]byte{0, 0, 0, 0}},
+		)
+	} else if q.Type == dnsmessage.TypeAAAA {
+		b.AAAAResource(
+			dnsmessage.ResourceHeader{
+				Name:  q.Name,
+				Type:  dnsmessage.TypeAAAA,
+				Class: dnsmessage.ClassINET,
+				TTL:   60,
+			},
+			dnsmessage.AAAAResource{AAAA: [16]byte{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}},
+		)
+	}
+	res, err := b.Finish()
+	return res, domain, err
+}
+
+// SetDNSBypass configures DNS interception for wildcard/domain exclusions.
+func (t *TunDevice) SetDNSBypass(exclusions []string, callback func(ips []net.IP)) {
+	t.dnsExclusions = exclusions
+	t.onDNSBypass = callback
+}
+
+
+func matchDomain(domain string, exclusions []string) bool {
+	domain = strings.TrimSuffix(domain, ".")
+	for _, exc := range exclusions {
+		exc = strings.TrimSpace(exc)
+		if exc == "" { continue }
+		if strings.HasPrefix(exc, "*.") {
+			suffix := strings.TrimPrefix(exc, "*")
+			if strings.HasSuffix(domain, suffix) || domain == exc[2:] {
+				return true
+			}
+		} else if domain == exc {
+			return true
+		}
+	}
+	return false
+}
+
+func parseDNSResponse(buf []byte, exclusions []string) []net.IP {
+	if len(exclusions) == 0 {
+		return nil
+	}
+	var p dnsmessage.Parser
+	header, err := p.Start(buf)
+	if err != nil || !header.Response {
+		return nil
+	}
+	q, err := p.Question()
+	if err != nil {
+		return nil
+	}
+	domain := q.Name.String()
+	if !matchDomain(domain, exclusions) {
+		return nil
+	}
+	
+	p.SkipAllQuestions()
+	var ips []net.IP
+	for {
+		h, err := p.AnswerHeader()
+		if err == dnsmessage.ErrSectionDone {
+			break
+		}
+		if err != nil {
+			break
+		}
+		if h.Type == dnsmessage.TypeA {
+			res, err := p.AResource()
+			if err == nil {
+				ips = append(ips, net.IP(res.A[:]))
+			}
+		} else if h.Type == dnsmessage.TypeAAAA {
+			res, err := p.AAAAResource()
+			if err == nil {
+				ips = append(ips, net.IP(res.AAAA[:]))
+			}
+		} else {
+			p.SkipAnswer()
+		}
+	}
+	return ips
+}
+
+// SetUpstreamDNS sets the upstream DNS server for the relay.
+func (t *TunDevice) SetUpstreamDNS(dns string) {
+	t.upstreamDNS = dns
+}
+
+// SetAdBlocker configures the DNS-level ad blocker.
+func (t *TunDevice) SetAdBlocker(a *AdBlocker) {
+	t.adBlocker = a
 }

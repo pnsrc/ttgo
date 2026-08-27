@@ -7,6 +7,10 @@ export namespace client {
 	    Password: string;
 	    Insecure: boolean;
 	    PinnedCertPEM: number[];
+	    Exclusions: string[];
+	    EnableAdBlock: boolean;
+	    UpstreamDNS: string;
+	    RoutingMode: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
@@ -20,6 +24,10 @@ export namespace client {
 	        this.Password = source["Password"];
 	        this.Insecure = source["Insecure"];
 	        this.PinnedCertPEM = source["PinnedCertPEM"];
+	        this.Exclusions = source["Exclusions"];
+	        this.EnableAdBlock = source["EnableAdBlock"];
+	        this.UpstreamDNS = source["UpstreamDNS"];
+	        this.RoutingMode = source["RoutingMode"];
 	    }
 	}
 	export class EndpointTOML {
@@ -54,6 +62,34 @@ export namespace client {
 	        this.UpstreamFallbackProtocol = source["UpstreamFallbackProtocol"];
 	        this.AntiDPI = source["AntiDPI"];
 	        this.Certificate = source["Certificate"];
+	    }
+	}
+	export class GlobalSettings {
+	    last_profile_id: string;
+	    bypass_domains: boolean;
+	    global_exclusions: string[];
+	    language: string;
+	    auto_connect: boolean;
+	    enable_adblock: boolean;
+	    theme: string;
+	    upstream_dns: string;
+	    routing_mode: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GlobalSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.last_profile_id = source["last_profile_id"];
+	        this.bypass_domains = source["bypass_domains"];
+	        this.global_exclusions = source["global_exclusions"];
+	        this.language = source["language"];
+	        this.auto_connect = source["auto_connect"];
+	        this.enable_adblock = source["enable_adblock"];
+	        this.theme = source["theme"];
+	        this.upstream_dns = source["upstream_dns"];
+	        this.routing_mode = source["routing_mode"];
 	    }
 	}
 	export class SocksTOML {

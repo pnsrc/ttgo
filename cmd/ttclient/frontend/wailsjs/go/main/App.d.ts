@@ -10,14 +10,24 @@ export function DeleteProfile(arg1:string):Promise<void>;
 
 export function Disconnect():Promise<void>;
 
+export function GetGlobalSettings():Promise<client.GlobalSettings>;
+
 export function ImportProfile():Promise<client.Profile>;
 
 export function ImportProfileContent(arg1:string,arg2:string):Promise<client.Profile>;
 
 export function OpenProfilesDir():Promise<void>;
 
+export function PingAll():Promise<Record<string, number>>;
+
 export function Profiles():Promise<Array<client.Profile>>;
 
 export function ProfilesDir():Promise<string>;
+
+export function ReadProfileContent(arg1:string):Promise<string>;
+
+export function SaveGlobalSettings(arg1:client.GlobalSettings):Promise<void>;
+
+export function SaveProfileContent(arg1:string,arg2:string):Promise<void>;
 
 export function Status():Promise<Record<string, any>>;

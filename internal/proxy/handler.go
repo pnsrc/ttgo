@@ -227,9 +227,13 @@ func (h *Handler) handleTCPTunnel(w http.ResponseWriter, r *http.Request, target
 		errCh <- err
 	}()
 
-	select {
-	case <-r.Context().Done():
-	case <-errCh:
+	// Ждём завершение обоих направлений, иначе режем ответный трафик слишком рано.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-errCh:
+		}
 	}
 	slog.Debug("tunnel closed", "target", target, "user", username)
 }

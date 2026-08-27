@@ -8,8 +8,14 @@ export default {
         mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       colors: {
-        bg: { DEFAULT: '#0a0a0a', subtle: '#111111', elevated: '#181818' },
-        border: { DEFAULT: '#27272a', subtle: '#1f1f23' },
+        bg: { DEFAULT: 'var(--bg-main)', subtle: 'var(--bg-subtle)', elevated: 'var(--bg-elevated)' },
+        border: { DEFAULT: 'var(--border-subtle)', subtle: 'var(--border-subtle)' },
+        fg: {
+          primary: 'var(--text-primary)',
+          secondary: 'var(--text-secondary)',
+          muted: 'var(--text-muted)',
+          faint: 'var(--text-faint)',
+        }
       },
       animation: {
         'fade-in': 'fadeIn 150ms ease-out',

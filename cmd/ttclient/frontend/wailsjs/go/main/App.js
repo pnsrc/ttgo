@@ -18,6 +18,10 @@ export function Disconnect() {
   return window['go']['main']['App']['Disconnect']();
 }
 
+export function GetGlobalSettings() {
+  return window['go']['main']['App']['GetGlobalSettings']();
+}
+
 export function ImportProfile() {
   return window['go']['main']['App']['ImportProfile']();
 }
@@ -30,12 +34,28 @@ export function OpenProfilesDir() {
   return window['go']['main']['App']['OpenProfilesDir']();
 }
 
+export function PingAll() {
+  return window['go']['main']['App']['PingAll']();
+}
+
 export function Profiles() {
   return window['go']['main']['App']['Profiles']();
 }
 
 export function ProfilesDir() {
   return window['go']['main']['App']['ProfilesDir']();
+}
+
+export function ReadProfileContent(arg1) {
+  return window['go']['main']['App']['ReadProfileContent'](arg1);
+}
+
+export function SaveGlobalSettings(arg1) {
+  return window['go']['main']['App']['SaveGlobalSettings'](arg1);
+}
+
+export function SaveProfileContent(arg1, arg2) {
+  return window['go']['main']['App']['SaveProfileContent'](arg1, arg2);
 }
 
 export function Status() {
