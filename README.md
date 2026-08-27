@@ -61,6 +61,7 @@ The admin tool detects the configured store type from vpn.toml and operates agai
 ```
 trusttunnel_endpoint  - the proxy server
 ttadmin               - admin TUI
+ttclient              - desktop VPN client (macOS, Windows)
 ```
 
 ## Quick install
@@ -175,7 +176,7 @@ password = "hunter2"
 
 ## Building
 
-Requires Go 1.22+. No CGO required.
+Requires Go 1.22+. No CGO required for server binaries.
 
 ```
 make build         # endpoint binary
@@ -188,6 +189,60 @@ For a full install including systemd and the setup wizard, use `install.sh`:
 ```bash
 sudo bash install.sh --build-dir .
 ```
+
+### Building ttclient (desktop VPN client)
+
+ttclient is a native desktop app built with [Wails v2](https://wails.io) (Go + WebView). It supports macOS and Windows.
+
+**Prerequisites (all platforms):**
+
+- Go 1.22+ — https://go.dev/dl/
+- Node.js 18+ — https://nodejs.org
+- Wails CLI:
+  ```bash
+  go install github.com/wailsapp/wails/v2/cmd/wails@latest
+  ```
+
+**macOS:**
+
+```bash
+cd cmd/ttclient
+wails build
+```
+
+The `.app` bundle will be in `build/bin/`. Requires root for TUN — the app auto-elevates via osascript on launch.
+
+**Windows:**
+
+1. Install prerequisites above
+2. Verify Wails dependencies:
+   ```bash
+   wails doctor
+   ```
+   WebView2 Runtime is required (pre-installed on Windows 10 21H2+ and Windows 11; if missing, download from https://developer.microsoft.com/en-us/microsoft-edge/webview2/)
+3. Download **wintun.dll** (amd64) from https://www.wintun.net and place it in `cmd/ttclient/`
+4. Build:
+   ```bash
+   cd cmd/ttclient
+   wails build
+   ```
+5. Copy `wintun.dll` next to `build/bin/ttclient.exe`
+
+The app auto-elevates via UAC on launch (Administrator required for TUN adapter).
+
+**Cross-compile Windows from macOS** (requires `brew install mingw-w64`):
+
+```bash
+cd cmd/ttclient
+CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
+  go build -tags desktop -o ttclient.exe -ldflags="-s -w -H windowsgui" .
+```
+
+**Logs:** `%LOCALAPPDATA%\ttclient\ttclient.log` (Windows) or `~/.config/ttclient/ttclient.log` (macOS/Linux).
+
+**Hotkeys:** Cmd+Shift+V (macOS) / Ctrl+Shift+V (Windows) — toggle connect/disconnect.
+
+**Profiles:** standard TrustTunnel `.toml` format. Import via UI or drop files into `~/.config/ttclient/profiles/` (macOS) / `%APPDATA%\ttclient\profiles\` (Windows).
 
 ## Admin tool
 
