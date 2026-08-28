@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +46,15 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	client.RecoverDNS()
+
+	go func() {
+		results := client.CheckAllEnrollments(a.profiles)
+		for _, r := range results {
+			if r.Revoked {
+				slog.Warn("enrolled device revoked", "message", r.Message)
+			}
+		}
+	}()
 }
 
 func (a *App) domReady(_ context.Context) {
@@ -347,6 +357,33 @@ func (a *App) OpenProfilesDir() error {
 	}
 	wruntime.BrowserOpenURL(a.ctx, "file://"+a.profiles.Dir())
 	return nil
+}
+
+// EnrollDevice привязывает устройство по ссылке из ЛК.
+func (a *App) EnrollDevice(enrollURL string) (*client.EnrollResult, error) {
+	if a.profiles == nil {
+		return nil, fmt.Errorf("profile store unavailable")
+	}
+	enrollURL = strings.TrimSpace(enrollURL)
+	if enrollURL == "" {
+		return nil, fmt.Errorf("empty enroll URL")
+	}
+	result, err := client.Enroll(enrollURL, a.profiles)
+	if err != nil {
+		return nil, err
+	}
+	if result.OK && result.ProfileID != "" {
+		_ = beeep.Notify("FireTunnel", "Устройство привязано", "")
+	}
+	if result.Revoked {
+		_ = beeep.Notify("FireTunnel", "Устройство отозвано: "+result.Message, "")
+	}
+	return result, nil
+}
+
+// GetEnrollments returns all active enrollment states.
+func (a *App) GetEnrollments() []client.EnrollState {
+	return client.LoadAllEnrollStates()
 }
 
 // suppress unused import lint when os only used conditionally
