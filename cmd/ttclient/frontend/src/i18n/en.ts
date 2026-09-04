@@ -52,4 +52,48 @@ export const en = {
   loading: "Loading...",
   
   select_sidebar: "Select a profile from the sidebar to view details",
+
+  enroll_hint: "Paste the enrollment link from your admin panel",
+  enroll_button: "Enroll device",
+  enrolling: "Enrolling...",
+  enroll_success: "Device enrolled successfully",
+  enroll_revoked: "Device access revoked",
+  enroll_link: "Enroll link",
+
+  logs: "VPN Core Logs",
+  logs_empty: "No logs yet",
+  logs_refresh: "Refresh",
+  logs_auto: "Auto-refresh",
+
+  active_conns: "Active connections",
+  add_exclusion: "Add to bypass",
+
+  dns_server: "DNS Server",
+  dns_server_desc: "Custom upstream DNS (default: 1.1.1.1)",
+
+  conn_filter: "Filter by domain or IP…",
+  conn_empty: "No connections yet",
+  exclude_domain: "Bypass domain",
+  exclude_wildcard: "Bypass wildcard",
+  exclude_ip: "Bypass IP",
+  copy: "Copy",
+
+  paste_config: "Paste config",
+  paste_hint: "Paste TOML config text below",
+  import_text: "Import from text",
+  paste_clipboard: "Paste from clipboard",
+
+  wintun_missing: "WinTun driver not found",
+  wintun_desc: "WinTun is required for VPN to work on Windows. Download and install it automatically?",
+  wintun_download: "Download WinTun",
+  wintun_downloading: "Downloading...",
+  wintun_installed: "WinTun installed successfully",
+
+  conflict_adapters: "Conflicting adapters",
+  conflict_adapters_desc: "Network adapters that may interfere with VPN (Radmin, Hamachi, AnyDesk, etc.)",
+  conflict_scan: "Scan adapters",
+  conflict_scanning: "Scanning...",
+  conflict_none: "No conflicting adapters found",
+  conflict_disable: "Disable",
+  conflict_disabled: "Disabled",
 };

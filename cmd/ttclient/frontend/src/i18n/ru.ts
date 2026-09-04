@@ -51,4 +51,48 @@ export const ru = {
   loading: "Загрузка...",
   
   select_sidebar: "Выберите профиль слева для просмотра деталей",
+
+  enroll_hint: "Вставьте ссылку привязки из панели управления",
+  enroll_button: "Привязать устройство",
+  enrolling: "Привязка...",
+  enroll_success: "Устройство привязано",
+  enroll_revoked: "Доступ устройства отозван",
+  enroll_link: "Привязка",
+
+  logs: "Логи ядра VPN",
+  logs_empty: "Логов пока нет",
+  logs_refresh: "Обновить",
+  logs_auto: "Авто-обновление",
+
+  active_conns: "Активные соединения",
+  add_exclusion: "Добавить в обход",
+
+  dns_server: "DNS сервер",
+  dns_server_desc: "Свой DNS-сервер (по умолчанию: 1.1.1.1)",
+
+  conn_filter: "Фильтр по домену или IP…",
+  conn_empty: "Соединений пока нет",
+  exclude_domain: "Обход домена",
+  exclude_wildcard: "Обход по маске",
+  exclude_ip: "Обход IP",
+  copy: "Копировать",
+
+  paste_config: "Вставить конфиг",
+  paste_hint: "Вставьте текст TOML конфига ниже",
+  import_text: "Импорт из текста",
+  paste_clipboard: "Вставить из буфера",
+
+  wintun_missing: "Драйвер WinTun не найден",
+  wintun_desc: "WinTun необходим для работы VPN на Windows. Скачать и установить автоматически?",
+  wintun_download: "Скачать WinTun",
+  wintun_downloading: "Скачивание...",
+  wintun_installed: "WinTun успешно установлен",
+
+  conflict_adapters: "Конфликтные адаптеры",
+  conflict_adapters_desc: "Сетевые адаптеры, которые могут мешать VPN (Radmin, Hamachi, AnyDesk и др.)",
+  conflict_scan: "Сканировать адаптеры",
+  conflict_scanning: "Сканирование...",
+  conflict_none: "Конфликтных адаптеров не найдено",
+  conflict_disable: "Отключить",
+  conflict_disabled: "Отключён",
 };

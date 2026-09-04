@@ -55,7 +55,96 @@ type TunDevice struct {
 	adBlocker     *AdBlocker
 	upstreamDNS   string
 
+	connMu      sync.Mutex
+	connTrack   map[uint64]*ConnEntry
+	connHistory []ConnEntry
+	connSeq     uint64
+
+	rdnsMu    sync.RWMutex
+	rdnsCache map[string]string // IP → domain
+
 	wg sync.WaitGroup
+}
+
+const maxConnHistory = 500
+
+type ConnEntry struct {
+	ID        uint64 `json:"id"`
+	Target    string `json:"target"`
+	Domain    string `json:"domain,omitempty"`
+	StartedAt int64  `json:"started_at"`
+	EndedAt   int64  `json:"ended_at,omitempty"`
+	BytesUp   int64  `json:"bytes_up"`
+	BytesDown int64  `json:"bytes_down"`
+	Active    bool   `json:"active"`
+}
+
+func (t *TunDevice) trackConn(target string) uint64 {
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
+	t.connSeq++
+	id := t.connSeq
+	if t.connTrack == nil {
+		t.connTrack = make(map[uint64]*ConnEntry)
+	}
+	host, _, _ := net.SplitHostPort(target)
+	domain := t.lookupDomain(host)
+	t.connTrack[id] = &ConnEntry{
+		ID:        id,
+		Target:    target,
+		Domain:    domain,
+		StartedAt: time.Now().Unix(),
+		Active:    true,
+	}
+	return id
+}
+
+func (t *TunDevice) recordDNS(domain string, ips []net.IP) {
+	t.rdnsMu.Lock()
+	defer t.rdnsMu.Unlock()
+	if t.rdnsCache == nil {
+		t.rdnsCache = make(map[string]string)
+	}
+	for _, ip := range ips {
+		t.rdnsCache[ip.String()] = domain
+	}
+}
+
+func (t *TunDevice) lookupDomain(ip string) string {
+	t.rdnsMu.RLock()
+	defer t.rdnsMu.RUnlock()
+	if t.rdnsCache == nil {
+		return ""
+	}
+	return t.rdnsCache[ip]
+}
+
+func (t *TunDevice) untrackConn(id uint64, up, down int64) {
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
+	if e, ok := t.connTrack[id]; ok {
+		finished := *e
+		finished.Active = false
+		finished.EndedAt = time.Now().Unix()
+		finished.BytesUp = up
+		finished.BytesDown = down
+		t.connHistory = append(t.connHistory, finished)
+		if len(t.connHistory) > maxConnHistory {
+			t.connHistory = t.connHistory[len(t.connHistory)-maxConnHistory:]
+		}
+		delete(t.connTrack, id)
+	}
+}
+
+func (t *TunDevice) AllConns() []ConnEntry {
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
+	out := make([]ConnEntry, 0, len(t.connHistory)+len(t.connTrack))
+	out = append(out, t.connHistory...)
+	for _, e := range t.connTrack {
+		out = append(out, *e)
+	}
+	return out
 }
 
 // OpenTUN creates a TUN device, brings it up, sets up gvisor netstack,
@@ -237,11 +326,12 @@ func (t *TunDevice) handleTCP(r *tcp.ForwarderRequest) {
 func (t *TunDevice) relayTCP(localConn net.Conn, target string) {
 	defer localConn.Close()
 	startedAt := time.Now()
+	connID := t.trackConn(target)
 
-	// Нельзя использовать короткий ctx для CONNECT-стрима: его отмена рвёт downlink.
 	remote, err := t.dialer.DialContext(t.ctx, target)
 	if err != nil {
 		slog.Debug("dial endpoint failed", "target", target, "err", err)
+		t.untrackConn(connID, 0, 0)
 		return
 	}
 	defer remote.Close()
@@ -259,14 +349,16 @@ func (t *TunDevice) relayTCP(localConn net.Conn, target string) {
 		copyDone <- copyResult{dir: "downlink", bytes: n, err: err}
 	}()
 
-	// Ждём завершение обоих направлений, иначе можно обрубить download.
 	r1 := <-copyDone
 	r2 := <-copyDone
+	upBytes := pickBytes("uplink", r1, r2)
+	downBytes := pickBytes("downlink", r1, r2)
+	t.untrackConn(connID, upBytes, downBytes)
 	slog.Debug("tunnel closed",
 		"target", target,
 		"duration", time.Since(startedAt).String(),
-		"uplink_bytes", pickBytes("uplink", r1, r2),
-		"downlink_bytes", pickBytes("downlink", r1, r2),
+		"uplink_bytes", upBytes,
+		"downlink_bytes", downBytes,
 		"uplink_err", pickErr("uplink", r1, r2),
 		"downlink_err", pickErr("downlink", r1, r2),
 	)
@@ -335,6 +427,10 @@ func (t *TunDevice) relayDNSUDP(localUDP net.Conn) {
 			continue
 		}
 		t.stats.BytesIn.Add(uint64(len(resp)))
+
+		if domain, ips := extractDNSMapping(resp); domain != "" && len(ips) > 0 {
+			t.recordDNS(domain, ips)
+		}
 
 		if t.onDNSBypass != nil {
 			if ips := parseDNSResponse(resp, t.dnsExclusions); len(ips) > 0 {
@@ -487,6 +583,38 @@ func matchDomain(domain string, exclusions []string) bool {
 		}
 	}
 	return false
+}
+
+func extractDNSMapping(buf []byte) (string, []net.IP) {
+	var p dnsmessage.Parser
+	header, err := p.Start(buf)
+	if err != nil || !header.Response {
+		return "", nil
+	}
+	q, err := p.Question()
+	if err != nil {
+		return "", nil
+	}
+	domain := strings.TrimSuffix(q.Name.String(), ".")
+	if err := p.SkipAllQuestions(); err != nil {
+		return "", nil
+	}
+	var ips []net.IP
+	for {
+		rr, err := p.Answer()
+		if err != nil {
+			break
+		}
+		switch rr.Body.(type) {
+		case *dnsmessage.AResource:
+			a := rr.Body.(*dnsmessage.AResource)
+			ips = append(ips, net.IP(a.A[:]))
+		case *dnsmessage.AAAAResource:
+			a := rr.Body.(*dnsmessage.AAAAResource)
+			ips = append(ips, net.IP(a.AAAA[:]))
+		}
+	}
+	return domain, ips
 }
 
 func parseDNSResponse(buf []byte, exclusions []string) []net.IP {

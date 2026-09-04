@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +24,7 @@ type App struct {
 	settings *client.SettingsStore
 
 	activeProfileID string // профиль с которым последний раз делали Connect
+	pendingDeepLink string // enroll URL из deep link (firetunnel://enroll?url=...)
 }
 
 func NewApp() *App {
@@ -386,5 +386,67 @@ func (a *App) GetEnrollments() []client.EnrollState {
 	return client.LoadAllEnrollStates()
 }
 
-// suppress unused import lint when os only used conditionally
-var _ = os.Getenv
+// GetPendingDeepLink returns and clears the pending enroll URL from deep link.
+func (a *App) GetPendingDeepLink() string {
+	link := a.pendingDeepLink
+	a.pendingDeepLink = ""
+	return link
+}
+
+// GetConnections returns active + history TCP tunnels.
+func (a *App) GetConnections() []client.ConnEntry {
+	return a.client.AllConnections()
+}
+
+// AddExclusion adds a domain to global exclusions and saves settings.
+func (a *App) AddExclusion(domain string) error {
+	if a.settings == nil {
+		return fmt.Errorf("settings store unavailable")
+	}
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return fmt.Errorf("empty domain")
+	}
+	s, err := a.settings.Load()
+	if err != nil {
+		return err
+	}
+	for _, e := range s.GlobalExclusions {
+		if e == domain {
+			return nil
+		}
+	}
+	s.GlobalExclusions = append(s.GlobalExclusions, domain)
+	s.BypassDomains = true
+	return a.settings.Save(s)
+}
+
+// ReadClipboard reads the system clipboard text (workaround for root losing clipboard access).
+func (a *App) ReadClipboard() string {
+	return readSystemClipboard()
+}
+
+// ReadLogs returns the last N lines of the application log file.
+func (a *App) ReadLogs(lines int) (string, error) {
+	if lines <= 0 {
+		lines = 200
+	}
+	return readLogTail(lines)
+}
+
+// ImportProfileFromText imports a profile from raw TOML text.
+func (a *App) ImportProfileFromText(content string, name string) (*client.Profile, error) {
+	if a.profiles == nil {
+		return nil, fmt.Errorf("profile store unavailable")
+	}
+	if strings.TrimSpace(content) == "" {
+		return nil, fmt.Errorf("empty config")
+	}
+	if name == "" {
+		name = "imported.toml"
+	}
+	if !strings.HasSuffix(name, ".toml") {
+		name += ".toml"
+	}
+	return a.profiles.ImportContent([]byte(content), name)
+}

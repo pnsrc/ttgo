@@ -10,5 +10,17 @@
   "author": {
     "name": "Alexey Alenich",
     "email": "pnsrc@ya.ru"
+  },
+  "info": {
+    "productName": "FireTunnel",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright 2024 Alexey Alenich",
+    "comments": "Desktop client for TrustTunnel VPN",
+    "protocols": [
+      {
+        "scheme": "firetunnel",
+        "role": "Viewer"
+      }
+    ]
   }
 }

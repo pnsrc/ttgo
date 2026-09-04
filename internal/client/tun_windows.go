@@ -5,7 +5,7 @@ package client
 import "gvisor.dev/gvisor/pkg/tcpip"
 
 const (
-	tunDeviceName = "TrustTunnel"
+	tunDeviceName = "FireTunnel"
 	tunHeaderLen  = 0
 )
 

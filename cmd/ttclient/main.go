@@ -5,14 +5,17 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
 //go:embed all:frontend/dist
@@ -24,18 +27,26 @@ func main() {
 		defer logFile.Close()
 	}
 
-	slog.Info("ttclient starting", "os", runtime.GOOS, "arch", runtime.GOARCH)
+	slog.Info("ttclient starting", "os", runtime.GOOS, "arch", runtime.GOARCH, "args", os.Args)
 	ensureElevated()
 
 	app := NewApp()
+	if link := parseDeepLink(os.Args); link != "" {
+		app.pendingDeepLink = link
+	}
+	if fileLink := readAndClearDeepLinkFile(); fileLink != "" && app.pendingDeepLink == "" {
+		app.pendingDeepLink = fileLink
+		slog.Info("deep link loaded from file")
+	}
 
 	err := wails.Run(&options.App{
-		Title:             "TrustTunnel",
+		Title:             "FireTunnel",
 		Width:             420,
 		Height:            620,
 		MinWidth:          360,
 		MinHeight:         560,
 		DisableResize:     false,
+		Frameless:         runtime.GOOS == "windows",
 		HideWindowOnClose: true,
 		BackgroundColour:  &options.RGBA{R: 10, G: 10, B: 10, A: 1},
 
@@ -46,6 +57,14 @@ func main() {
 		OnShutdown: app.shutdown,
 
 		Bind: []interface{}{app},
+
+		Windows: &windows.Options{
+			WebviewIsTransparent:              true,
+			WindowIsTranslucent:               true,
+			DisableWindowIcon:                 false,
+			Theme:                             windows.Dark,
+			DisableFramelessWindowDecorations: false,
+		},
 
 		Mac: &mac.Options{
 			TitleBar:             mac.TitleBarHiddenInset(),
@@ -87,4 +106,30 @@ func setupLogging() *os.File {
 	slog.SetDefault(slog.New(slog.NewTextHandler(multi, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	slog.Info("log file opened", "path", logPath)
 	return f
+}
+
+func parseDeepLink(args []string) string {
+	for _, arg := range args[1:] {
+		if strings.HasPrefix(arg, "firetunnel://") {
+			u, err := url.Parse(arg)
+			if err != nil {
+				continue
+			}
+			if u.Host == "enroll" {
+				enrollURL := u.Query().Get("url")
+				if enrollURL != "" {
+					slog.Info("deep link enroll detected", "url_prefix", enrollURL[:min(len(enrollURL), 20)]+"...")
+					return enrollURL
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

@@ -188,6 +188,13 @@ func (c *Client) Status() Snapshot {
 	return s
 }
 
+func (c *Client) AllConnections() []ConnEntry {
+	if c.tun == nil {
+		return nil
+	}
+	return c.tun.AllConns()
+}
+
 func (c *Client) setState(s State, errMsg string) {
 	c.state.Store(s)
 	c.errStr.Store(errMsg)

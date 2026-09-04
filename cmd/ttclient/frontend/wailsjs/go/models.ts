@@ -30,6 +30,32 @@ export namespace client {
 	        this.RoutingMode = source["RoutingMode"];
 	    }
 	}
+	export class ConnEntry {
+	    id: number;
+	    target: string;
+	    domain?: string;
+	    started_at: number;
+	    ended_at?: number;
+	    bytes_up: number;
+	    bytes_down: number;
+	    active: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConnEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.target = source["target"];
+	        this.domain = source["domain"];
+	        this.started_at = source["started_at"];
+	        this.ended_at = source["ended_at"];
+	        this.bytes_up = source["bytes_up"];
+	        this.bytes_down = source["bytes_down"];
+	        this.active = source["active"];
+	    }
+	}
 	export class EndpointTOML {
 	    Hostname: string;
 	    Addresses: string[];
@@ -62,6 +88,42 @@ export namespace client {
 	        this.UpstreamFallbackProtocol = source["UpstreamFallbackProtocol"];
 	        this.AntiDPI = source["AntiDPI"];
 	        this.Certificate = source["Certificate"];
+	    }
+	}
+	export class EnrollResult {
+	    ok: boolean;
+	    profile_id?: string;
+	    error?: string;
+	    message?: string;
+	    revoked?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EnrollResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.profile_id = source["profile_id"];
+	        this.error = source["error"];
+	        this.message = source["message"];
+	        this.revoked = source["revoked"];
+	    }
+	}
+	export class EnrollState {
+	    url: string;
+	    fingerprint: string;
+	    profile_id?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EnrollState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.fingerprint = source["fingerprint"];
+	        this.profile_id = source["profile_id"];
 	    }
 	}
 	export class GlobalSettings {
@@ -246,6 +308,27 @@ export namespace client {
 	}
 	
 	
+
+}
+
+export namespace main {
+	
+	export class ConflictAdapter {
+	    name: string;
+	    description: string;
+	    status: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConflictAdapter(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.status = source["status"];
+	    }
+	}
 
 }
 
