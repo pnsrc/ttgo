@@ -58,6 +58,10 @@ export function GetPendingDeepLink() {
   return window['go']['main']['App']['GetPendingDeepLink']();
 }
 
+export function HandleURLOpen(arg1) {
+  return window['go']['main']['App']['HandleURLOpen'](arg1);
+}
+
 export function ImportProfile() {
   return window['go']['main']['App']['ImportProfile']();
 }

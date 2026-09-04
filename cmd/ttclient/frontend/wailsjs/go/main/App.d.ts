@@ -31,6 +31,8 @@ export function GetGlobalSettings():Promise<client.GlobalSettings>;
 
 export function GetPendingDeepLink():Promise<string>;
 
+export function HandleURLOpen(arg1:string):Promise<void>;
+
 export function ImportProfile():Promise<client.Profile>;
 
 export function ImportProfileContent(arg1:string,arg2:string):Promise<client.Profile>;

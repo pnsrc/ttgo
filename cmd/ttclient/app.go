@@ -393,6 +393,15 @@ func (a *App) GetPendingDeepLink() string {
 	return link
 }
 
+// HandleURLOpen processes a deep link URL received while the app is running.
+func (a *App) HandleURLOpen(rawURL string) {
+	slog.Info("deep link received while running", "url_prefix", rawURL[:min(len(rawURL), 20)]+"...")
+	parsed := parseDeepLink([]string{"", rawURL})
+	if parsed != "" && a.ctx != nil {
+		wruntime.EventsEmit(a.ctx, "deeplink", parsed)
+	}
+}
+
 // GetConnections returns active + history TCP tunnels.
 func (a *App) GetConnections() []client.ConnEntry {
 	return a.client.AllConnections()

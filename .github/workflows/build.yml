@@ -1,0 +1,99 @@
+name: Build FireTunnel
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build macOS app
+        working-directory: cmd/ttclient
+        run: wails build -platform darwin/universal -o FireTunnel
+
+      - name: Create DMG
+        working-directory: cmd/ttclient
+        run: |
+          APP_PATH="build/bin/FireTunnel.app"
+          DMG_PATH="build/bin/FireTunnel-macOS.dmg"
+          hdiutil create -volname "FireTunnel" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FireTunnel-macOS
+          path: cmd/ttclient/build/bin/FireTunnel-macOS.dmg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build Windows app
+        working-directory: cmd/ttclient
+        run: wails build -platform windows/amd64 -o FireTunnel.exe -nsis
+
+      - name: Download WinTun DLL
+        working-directory: cmd/ttclient/build/bin
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile wintun.zip
+          Expand-Archive -Path wintun.zip -DestinationPath wintun_extracted
+          Copy-Item "wintun_extracted\wintun\bin\amd64\wintun.dll" -Destination .
+          Remove-Item -Recurse wintun_extracted, wintun.zip
+
+      - name: Package Windows build
+        working-directory: cmd/ttclient/build/bin
+        shell: pwsh
+        run: |
+          Compress-Archive -Path FireTunnel.exe, wintun.dll -DestinationPath FireTunnel-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FireTunnel-Windows
+          path: cmd/ttclient/build/bin/FireTunnel-Windows.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/FireTunnel-macOS/FireTunnel-macOS.dmg
+            artifacts/FireTunnel-Windows/FireTunnel-Windows.zip

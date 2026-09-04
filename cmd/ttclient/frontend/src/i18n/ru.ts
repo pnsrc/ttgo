@@ -83,10 +83,10 @@ export const ru = {
   paste_clipboard: "Вставить из буфера",
 
   wintun_missing: "Драйвер WinTun не найден",
-  wintun_desc: "WinTun необходим для работы VPN на Windows. Скачать и установить автоматически?",
+  wintun_desc: "WinTun необходим для работы VPN на Windows. Скачать его?",
   wintun_download: "Скачать WinTun",
   wintun_downloading: "Скачивание...",
-  wintun_installed: "WinTun успешно установлен",
+  wintun_installed: "WinTun успешно скачан",
 
   conflict_adapters: "Конфликтные адаптеры",
   conflict_adapters_desc: "Сетевые адаптеры, которые могут мешать VPN (Radmin, Hamachi, AnyDesk и др.)",

@@ -75,6 +75,9 @@ func main() {
 				Title:   "FireTunnel",
 				Message: "Desktop client for TrustTunnel VPN",
 			},
+			OnUrlOpen: func(url string) {
+				app.HandleURLOpen(url)
+			},
 		},
 	})
 

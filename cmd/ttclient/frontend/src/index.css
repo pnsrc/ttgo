@@ -59,7 +59,6 @@
     background-color: var(--bg-main);
     color: var(--text-primary);
     @apply overflow-hidden font-sans select-none antialiased;
-    --wails-draggable: drag;
   }
 }
 

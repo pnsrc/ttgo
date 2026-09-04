@@ -11,6 +11,30 @@ import (
 	"strings"
 )
 
+func init() {
+	registerURLScheme()
+}
+
+func registerURLScheme() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	appPath := exe
+	for appPath != "/" && appPath != "." {
+		if strings.HasSuffix(appPath, ".app") {
+			break
+		}
+		appPath = filepath.Dir(appPath)
+	}
+	if !strings.HasSuffix(appPath, ".app") {
+		return
+	}
+	lsregister := "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+	exec.Command(lsregister, "-R", "-f", appPath).Run()
+	log.Println("Registered URL scheme via lsregister:", appPath)
+}
+
 func ensureElevated() {
 	if os.Geteuid() == 0 {
 		return
