@@ -27,7 +27,9 @@ jobs:
 
       - name: Build macOS app
         working-directory: cmd/ttclient
-        run: wails build -platform darwin/universal -o FireTunnel
+        run: |
+          LDFLAGS="-X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X main.GitCommit=$(git rev-parse --short HEAD) -X main.GitBranch=$(git rev-parse --abbrev-ref HEAD) -X main.GoVersion=$(go version | cut -d' ' -f3)"
+          wails build -platform darwin/universal -o FireTunnel -ldflags "$LDFLAGS"
 
       - name: Create DMG
         working-directory: cmd/ttclient
@@ -59,7 +61,10 @@ jobs:
 
       - name: Build Windows app
         working-directory: cmd/ttclient
-        run: wails build -platform windows/amd64 -o FireTunnel.exe -nsis
+        shell: bash
+        run: |
+          LDFLAGS="-X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X main.GitCommit=$(git rev-parse --short HEAD) -X main.GitBranch=$(git rev-parse --abbrev-ref HEAD) -X main.GoVersion=$(go version | cut -d' ' -f3)"
+          wails build -platform windows/amd64 -o FireTunnel.exe -nsis -ldflags "$LDFLAGS"
 
       - name: Download WinTun DLL
         working-directory: cmd/ttclient/build/bin

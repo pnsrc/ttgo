@@ -27,6 +27,9 @@ export const DownloadWintun = () => w.DownloadWintun() as Promise<void>;
 export const FindConflictAdapters = () => w.FindConflictAdapters() as Promise<any[]>;
 export const DisableAdapter = (name: string) => w.DisableAdapter(name) as Promise<void>;
 export const GetEnrollments = () => w.GetEnrollments() as Promise<any[]>;
+export const GetVersion = () => w.GetVersion() as Promise<string>;
+export const CheckForUpdate = () => w.CheckForUpdate() as Promise<{ available: boolean; version: string; url: string; release_notes: string }>;
+export const GetBuildInfo = () => w.GetBuildInfo() as Promise<{ version: string; build_date: string; git_commit: string; git_branch: string; go_version: string; os: string; arch: string }>;
 
 export {
   ConnectProfile,

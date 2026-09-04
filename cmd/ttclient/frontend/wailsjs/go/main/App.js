@@ -6,6 +6,10 @@ export function AddExclusion(arg1) {
   return window['go']['main']['App']['AddExclusion'](arg1);
 }
 
+export function CheckForUpdate() {
+  return window['go']['main']['App']['CheckForUpdate']();
+}
+
 export function CheckWintun() {
   return window['go']['main']['App']['CheckWintun']();
 }
@@ -42,6 +46,10 @@ export function FindConflictAdapters() {
   return window['go']['main']['App']['FindConflictAdapters']();
 }
 
+export function GetBuildInfo() {
+  return window['go']['main']['App']['GetBuildInfo']();
+}
+
 export function GetConnections() {
   return window['go']['main']['App']['GetConnections']();
 }
@@ -56,6 +64,10 @@ export function GetGlobalSettings() {
 
 export function GetPendingDeepLink() {
   return window['go']['main']['App']['GetPendingDeepLink']();
+}
+
+export function GetVersion() {
+  return window['go']['main']['App']['GetVersion']();
 }
 
 export function HandleURLOpen(arg1) {

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 type ConflictAdapter struct {
@@ -61,8 +62,10 @@ func (a *App) DownloadWintun() error {
 	f.Close()
 	defer os.Remove(tmpZip)
 
-	out, err := exec.Command("powershell", "-NoProfile", "-Command",
-		fmt.Sprintf(`Expand-Archive -Path '%s' -DestinationPath '%s' -Force`, tmpZip, filepath.Join(dir, "wintun_tmp"))).CombinedOutput()
+	expandCmd := exec.Command("powershell", "-NoProfile", "-Command",
+		fmt.Sprintf(`Expand-Archive -Path '%s' -DestinationPath '%s' -Force`, tmpZip, filepath.Join(dir, "wintun_tmp")))
+	expandCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := expandCmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("unzip: %s: %w", string(out), err)
 	}
@@ -86,8 +89,10 @@ func (a *App) DownloadWintun() error {
 }
 
 func (a *App) FindConflictAdapters() []ConflictAdapter {
-	out, err := exec.Command("powershell", "-NoProfile", "-Command",
-		`Get-NetAdapter | Select-Object Name, InterfaceDescription, Status | ConvertTo-Csv -NoTypeInformation`).Output()
+	listCmd := exec.Command("powershell", "-NoProfile", "-Command",
+		`Get-NetAdapter | Select-Object Name, InterfaceDescription, Status | ConvertTo-Csv -NoTypeInformation`)
+	listCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := listCmd.Output()
 	if err != nil {
 		slog.Warn("failed to list adapters", "err", err)
 		return nil
@@ -130,8 +135,10 @@ func (a *App) FindConflictAdapters() []ConflictAdapter {
 }
 
 func (a *App) DisableAdapter(name string) error {
-	out, err := exec.Command("powershell", "-NoProfile", "-Command",
-		fmt.Sprintf(`Disable-NetAdapter -Name '%s' -Confirm:$false`, name)).CombinedOutput()
+	disableCmd := exec.Command("powershell", "-NoProfile", "-Command",
+		fmt.Sprintf(`Disable-NetAdapter -Name '%s' -Confirm:$false`, name))
+	disableCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := disableCmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("disable adapter %s: %s: %w", name, string(out), err)
 	}

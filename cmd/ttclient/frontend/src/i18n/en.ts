@@ -96,4 +96,22 @@ export const en = {
   conflict_none: "No conflicting adapters found",
   conflict_disable: "Disable",
   conflict_disabled: "Disabled",
+
+  version: "Version",
+  version_current: "Current version",
+  check_update: "Check for updates",
+  checking_update: "Checking...",
+  update_available: "Update available",
+  update_latest: "You are on the latest version",
+  update_download: "Download",
+  update_error: "Failed to check for updates",
+  about: "About",
+  build_date: "Build date",
+  git_commit: "Commit",
+  git_branch: "Branch",
+  go_version: "Go version",
+  platform: "Platform",
+
+  enrollment_revoked_title: "Access revoked",
+  enrollment_revoked_msg: "This device has been revoked by the server administrator",
 };

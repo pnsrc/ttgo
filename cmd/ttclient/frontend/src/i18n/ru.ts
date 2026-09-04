@@ -95,4 +95,22 @@ export const ru = {
   conflict_none: "Конфликтных адаптеров не найдено",
   conflict_disable: "Отключить",
   conflict_disabled: "Отключён",
+
+  version: "Версия",
+  version_current: "Текущая версия",
+  check_update: "Проверить обновления",
+  checking_update: "Проверка...",
+  update_available: "Доступно обновление",
+  update_latest: "Установлена последняя версия",
+  update_download: "Скачать",
+  update_error: "Не удалось проверить обновления",
+  about: "О программе",
+  build_date: "Дата сборки",
+  git_commit: "Коммит",
+  git_branch: "Ветка",
+  go_version: "Версия Go",
+  platform: "Платформа",
+
+  enrollment_revoked_title: "Доступ отозван",
+  enrollment_revoked_msg: "Устройство отозвано администратором сервера",
 };

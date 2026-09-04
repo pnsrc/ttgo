@@ -313,6 +313,30 @@ export namespace client {
 
 export namespace main {
 	
+	export class BuildInfo {
+	    version: string;
+	    build_date: string;
+	    git_commit: string;
+	    git_branch: string;
+	    go_version: string;
+	    os: string;
+	    arch: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BuildInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.build_date = source["build_date"];
+	        this.git_commit = source["git_commit"];
+	        this.git_branch = source["git_branch"];
+	        this.go_version = source["go_version"];
+	        this.os = source["os"];
+	        this.arch = source["arch"];
+	    }
+	}
 	export class ConflictAdapter {
 	    name: string;
 	    description: string;
@@ -327,6 +351,24 @@ export namespace main {
 	        this.name = source["name"];
 	        this.description = source["description"];
 	        this.status = source["status"];
+	    }
+	}
+	export class UpdateInfo {
+	    available: boolean;
+	    version: string;
+	    url: string;
+	    release_notes: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.version = source["version"];
+	        this.url = source["url"];
+	        this.release_notes = source["release_notes"];
 	    }
 	}
 

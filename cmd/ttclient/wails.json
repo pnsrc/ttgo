@@ -13,7 +13,7 @@
   },
   "info": {
     "productName": "FireTunnel",
-    "productVersion": "1.0.0",
+    "productVersion": "0.1.0-beta",
     "copyright": "Copyright 2024 Alexey Alenich",
     "comments": "Desktop client for TrustTunnel VPN",
     "protocols": [

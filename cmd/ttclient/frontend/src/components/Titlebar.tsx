@@ -46,15 +46,15 @@ export function Titlebar(props: {
           </>
         )}
         {isWindows && (
-          <div className="flex items-center ml-2 -mr-1">
-            <button onClick={() => WindowMinimise()} className="w-8 h-8 flex items-center justify-center hover:bg-white/10 rounded transition-colors text-fg-faint hover:text-fg-primary">
-              <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+          <div className="flex items-center gap-1.5 ml-2 -mr-1">
+            <button onClick={() => Quit()} className="w-3 h-3 rounded-full bg-[#ff5f57] hover:brightness-90 transition-all group flex items-center justify-center" title="Close">
+              <svg className="w-1.5 h-1.5 opacity-0 group-hover:opacity-100 transition-opacity" viewBox="0 0 6 6" stroke="#4a0002" strokeWidth="1.2" strokeLinecap="round"><line x1="0.5" y1="0.5" x2="5.5" y2="5.5"/><line x1="5.5" y1="0.5" x2="0.5" y2="5.5"/></svg>
             </button>
-            <button onClick={() => WindowToggleMaximise()} className="w-8 h-8 flex items-center justify-center hover:bg-white/10 rounded transition-colors text-fg-faint hover:text-fg-primary">
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1"><rect x="0.5" y="0.5" width="9" height="9" rx="1.5"/></svg>
+            <button onClick={() => WindowMinimise()} className="w-3 h-3 rounded-full bg-[#febc2e] hover:brightness-90 transition-all group flex items-center justify-center" title="Minimize">
+              <svg className="w-1.5 h-1.5 opacity-0 group-hover:opacity-100 transition-opacity" viewBox="0 0 6 6"><line x1="0.5" y1="3" x2="5.5" y2="3" stroke="#995700" strokeWidth="1.2" strokeLinecap="round"/></svg>
             </button>
-            <button onClick={() => Quit()} className="w-8 h-8 flex items-center justify-center hover:bg-red-500/80 rounded transition-colors text-fg-faint hover:text-white">
-              <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg>
+            <button onClick={() => WindowToggleMaximise()} className="w-3 h-3 rounded-full bg-[#28c840] hover:brightness-90 transition-all group flex items-center justify-center" title="Maximize">
+              <svg className="w-1.5 h-1.5 opacity-0 group-hover:opacity-100 transition-opacity" viewBox="0 0 6 6"><path d="M1 4.5L3 1.5L5 4.5" stroke="#006500" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
             </button>
           </div>
         )}

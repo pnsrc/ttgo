@@ -23,6 +23,7 @@ func ensureElevated() {
 	cmd := exec.Command("powershell", "-NoProfile", "-Command",
 		"Start-Process", "'"+exe+"'", "-Verb", "RunAs",
 		"-ArgumentList", "'"+strings.Join(os.Args[1:], " ")+"'")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if err := cmd.Run(); err != nil {
 		log.Fatalf("Failed to elevate: %v", err)
 	}
@@ -85,7 +86,9 @@ func registerDeepLinkProtocol() {
 		`Set-ItemProperty -Path 'HKCU:\Software\Classes\firetunnel\shell\open\command' -Name '(Default)' -Value '"` + exe + `" "%1"'`,
 	}
 
-	for _, cmd := range commands {
-		exec.Command("powershell", "-NoProfile", "-Command", cmd).Run()
+	for _, c := range commands {
+		cmd := exec.Command("powershell", "-NoProfile", "-Command", c)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		cmd.Run()
 	}
 }

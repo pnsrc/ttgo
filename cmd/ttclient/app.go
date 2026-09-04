@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -15,8 +19,25 @@ import (
 	"golang.design/x/hotkey"
 )
 
-// App — Wails-bound объект. Все экспортируемые методы доступны из frontend
-// через wails-сгенерированные TS bindings (frontend/wailsjs/...).
+const Version = "0.1.0-beta"
+
+var (
+	BuildDate  = "dev"
+	GitCommit  = "unknown"
+	GitBranch  = "unknown"
+	GoVersion  = "unknown"
+)
+
+type BuildInfo struct {
+	Version   string `json:"version"`
+	BuildDate string `json:"build_date"`
+	GitCommit string `json:"git_commit"`
+	GitBranch string `json:"git_branch"`
+	GoVersion string `json:"go_version"`
+	OS        string `json:"os"`
+	Arch      string `json:"arch"`
+}
+
 type App struct {
 	ctx      context.Context
 	client   *client.Client
@@ -171,6 +192,11 @@ func (a *App) ConnectProfile(id string) error {
 	if a.profiles == nil {
 		return fmt.Errorf("profile store unavailable")
 	}
+
+	if revoked := a.checkEnrollmentForProfile(id); revoked {
+		return fmt.Errorf("device access revoked")
+	}
+
 	p, err := a.profiles.Get(id)
 	if err != nil {
 		return err
@@ -441,6 +467,83 @@ func (a *App) ReadLogs(lines int) (string, error) {
 		lines = 200
 	}
 	return readLogTail(lines)
+}
+
+// GetVersion returns the current application version.
+func (a *App) GetVersion() string { return Version }
+
+// GetBuildInfo returns full build information.
+func (a *App) GetBuildInfo() BuildInfo {
+	return BuildInfo{
+		Version:   Version,
+		BuildDate: BuildDate,
+		GitCommit: GitCommit,
+		GitBranch: GitBranch,
+		GoVersion: GoVersion,
+		OS:        runtime.GOOS,
+		Arch:      runtime.GOARCH,
+	}
+}
+
+type UpdateInfo struct {
+	Available   bool   `json:"available"`
+	Version     string `json:"version"`
+	URL         string `json:"url"`
+	ReleaseNotes string `json:"release_notes"`
+}
+
+// CheckForUpdate checks GitHub releases for a newer version.
+func (a *App) CheckForUpdate() (*UpdateInfo, error) {
+	c := &http.Client{Timeout: 10 * time.Second}
+	resp, err := c.Get("https://api.github.com/repos/pnsrc/ttgo/releases/latest")
+	if err != nil {
+		return nil, fmt.Errorf("check update: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return &UpdateInfo{Available: false}, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return nil, err
+	}
+	var release struct {
+		TagName string `json:"tag_name"`
+		HTMLURL string `json:"html_url"`
+		Body    string `json:"body"`
+	}
+	if err := json.Unmarshal(body, &release); err != nil {
+		return nil, err
+	}
+	remote := strings.TrimPrefix(release.TagName, "v")
+	if remote != "" && remote != Version && remote > Version {
+		return &UpdateInfo{Available: true, Version: remote, URL: release.HTMLURL, ReleaseNotes: release.Body}, nil
+	}
+	return &UpdateInfo{Available: false, Version: Version}, nil
+}
+
+func (a *App) checkEnrollmentForProfile(profileID string) bool {
+	states := client.LoadAllEnrollStates()
+	for _, s := range states {
+		if s.ProfileID == profileID {
+			result, err := client.Enroll(s.URL, a.profiles)
+			if err != nil {
+				slog.Warn("enrollment check failed before connect", "err", err)
+				return false
+			}
+			if result.Revoked {
+				slog.Warn("enrollment revoked, blocking connect", "profile_id", profileID)
+				_ = beeep.Notify("FireTunnel", "Device access revoked: "+result.Message, "")
+				wruntime.EventsEmit(a.ctx, "enrollment_revoked", map[string]string{
+					"profile_id": profileID,
+					"message":    result.Message,
+				})
+				return true
+			}
+			return false
+		}
+	}
+	return false
 }
 
 // ImportProfileFromText imports a profile from raw TOML text.

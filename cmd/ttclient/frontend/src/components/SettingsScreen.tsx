@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, Fragment } from "react";
 import { motion } from "framer-motion";
 import { useTranslation } from "../i18n";
-import { GetGlobalSettings, SaveGlobalSettings, FindConflictAdapters, DisableAdapter } from "../api";
+import { GetGlobalSettings, SaveGlobalSettings, FindConflictAdapters, DisableAdapter, GetBuildInfo, CheckForUpdate } from "../api";
+import logoUrl from "../assets/logo.png";
 import { GlobalSettings } from "../types";
 
 export function GlobalSettingsScreen(props: { onSave: (theme?: string) => void; onCancel: () => void }) {
@@ -125,6 +126,7 @@ export function GlobalSettingsScreen(props: { onSave: (theme?: string) => void; 
         </div>
 
         <ConflictAdaptersSection />
+        <AboutSection />
       </div>
 
       {error && <div className="text-red-400 text-xs mt-3 font-medium">{error}</div>}
@@ -168,7 +170,7 @@ function ConflictAdaptersSection() {
   }
 
   return (
-    <div className="bg-bg-subtle border border-border rounded-lg p-4 space-y-3 mt-4">
+    <div className="bg-bg-subtle border border-border rounded-lg p-4 space-y-3">
       <div className="flex flex-col">
         <span className="text-sm font-medium text-fg-secondary">{t.conflict_adapters}</span>
         <span className="text-[11px] text-fg-faint">{t.conflict_adapters_desc}</span>
@@ -202,6 +204,84 @@ function ConflictAdaptersSection() {
           </div>
         )
       )}
+    </div>
+  );
+}
+
+function AboutSection() {
+  const { t } = useTranslation();
+  const [build, setBuild] = useState<any>(null);
+  const [update, setUpdate] = useState<{ available: boolean; version: string; url: string } | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    GetBuildInfo().then(setBuild);
+  }, []);
+
+  async function checkUpdate() {
+    setChecking(true);
+    setError("");
+    setUpdate(null);
+    try {
+      const info = await CheckForUpdate();
+      setUpdate(info);
+    } catch {
+      setError(t.update_error);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  const infoRows = build ? [
+    { label: t.version_current, value: `v${build.version}` },
+    { label: t.build_date, value: build.build_date === "dev" ? "Development" : new Date(build.build_date).toLocaleDateString() },
+    { label: t.git_commit, value: build.git_commit },
+    { label: t.git_branch, value: build.git_branch },
+    { label: t.go_version, value: build.go_version },
+    { label: t.platform, value: `${build.os}/${build.arch}` },
+  ] : [];
+
+  return (
+    <div className="bg-bg-subtle border border-border rounded-lg p-4 space-y-4">
+      <div className="flex items-center gap-3">
+        <img src={logoUrl} alt="FireTunnel" className="w-12 h-12 rounded-xl shadow-lg" />
+        <div className="flex flex-col">
+          <span className="text-sm font-bold text-fg-primary">FireTunnel</span>
+          <span className="text-[11px] text-fg-faint">Desktop client for TrustTunnel VPN</span>
+        </div>
+      </div>
+
+      {build && (
+        <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
+          {infoRows.map(row => (
+            <Fragment key={row.label}>
+              <span className="text-[11px] text-fg-faint">{row.label}</span>
+              <span className="text-[11px] font-mono text-fg-secondary truncate">{row.value}</span>
+            </Fragment>
+          ))}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button onClick={checkUpdate} disabled={checking} className="btn-ghost px-3 py-1.5 rounded-md text-xs font-medium">
+          {checking ? t.checking_update : t.check_update}
+        </button>
+      </div>
+
+      {update && (
+        update.available ? (
+          <div className="flex items-center justify-between bg-emerald-500/10 border border-emerald-500/20 rounded-md px-3 py-2">
+            <span className="text-xs font-medium text-emerald-400">{t.update_available}: v{update.version}</span>
+            <button onClick={() => window.open(update.url)} className="text-xs px-3 py-1 rounded bg-emerald-500 text-zinc-900 hover:bg-emerald-400 font-medium">
+              {t.update_download}
+            </button>
+          </div>
+        ) : (
+          <div className="text-xs text-fg-faint py-1">{t.update_latest}</div>
+        )
+      )}
+      {error && <div className="text-xs text-red-400">{error}</div>}
     </div>
   );
 }
